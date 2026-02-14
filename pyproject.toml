@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "vidgen"
+version = "0.1.0"
+description = "Automated video generation pipeline with TUI"
+requires-python = ">=3.10"
+dependencies = [
+    "textual>=0.44.0",
+    "huggingface-hub>=0.20.0",
+    "Pillow>=10.0.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+vidgen = "vidgen.main:main"
