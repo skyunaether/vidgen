@@ -15,7 +15,7 @@ from .imagegen import generate_image, generate_placeholder_image
 from .musicgen import generate_music
 from .scriptgen import Scene, generate_script, parse_markdown_story, parse_user_story, script_to_json
 from .story_agent import review_and_refine
-from .ttsgen import generate_narration_track
+from .ttsgen import generate_narration_track, sync_scene_durations_to_narration
 from .videogen import generate_placeholder_video, generate_video
 
 log = logging.getLogger(__name__)
@@ -283,6 +283,10 @@ class Pipeline:
                     self.progress_cb(
                         f"  Scene {s.index}: [{s.media_type}] {s.duration}s — {s.narration[:60]}"
                     )
+            # Sync scene durations to fit narration (prevents cutting off speech)
+            sync_scene_durations_to_narration(self._scenes, self.progress_cb)
+            self.progress_cb("")
+            
             media_paths = self.step_generate_images()
             media_paths = self.step_generate_videos(media_paths)
             narration = self.step_generate_narration()

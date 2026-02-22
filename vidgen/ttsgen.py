@@ -12,10 +12,10 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
-log = logging.getLogger(__name__)
+from .config import NARRATION_LEAD_IN, NARRATION_PADDING_AFTER
+from .scriptgen import Scene
 
-# Silence before narration starts within a scene (seconds)
-NARRATION_LEAD_IN = 0.6
+log = logging.getLogger(__name__)
 
 
 def _gtts_to_mp3(text: str) -> bytes:
@@ -40,6 +40,75 @@ def _mp3_duration(mp3_path: Path) -> float:
     if result.returncode == 0:
         return float(result.stdout.strip())
     return 0.0
+
+
+def sync_scene_durations_to_narration(
+    scenes: list[Scene],
+    progress_cb: Callable[[str], None] | None = None,
+) -> list[Scene]:
+    """Measure actual TTS narration duration and adjust scene durations to fit.
+
+    For each scene:
+      1. Generate TTS audio (MP3)
+      2. Measure actual speech duration
+      3. Adjust scene.duration = max(original, lead_in + speech + padding_after)
+
+    This ensures narration is never cut off mid-sentence.
+
+    Args:
+        scenes: List of Scene objects (will be modified in-place).
+        progress_cb: Progress callback.
+
+    Returns:
+        The same scenes list (modified in-place).
+    """
+    if progress_cb:
+        progress_cb("🎙️  Syncing scene durations to narration timing...")
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="vidgen_tts_sync_"))
+
+    for scene in scenes:
+        try:
+            # Generate TTS MP3
+            mp3_bytes = _gtts_to_mp3(scene.narration)
+            mp3_path = tmpdir / f"sync_{scene.index:03d}.mp3"
+            mp3_path.write_bytes(mp3_bytes)
+
+            # Measure actual speech duration
+            speech_dur = _mp3_duration(mp3_path)
+
+            # Calculate required scene duration
+            required_dur = NARRATION_LEAD_IN + speech_dur + NARRATION_PADDING_AFTER
+
+            # Adjust if needed
+            if scene.duration < required_dur:
+                if progress_cb:
+                    progress_cb(
+                        f"  Scene {scene.index}: {scene.duration:.1f}s → "
+                        f"{required_dur:.1f}s (speech {speech_dur:.1f}s)"
+                    )
+                scene.duration = round(required_dur, 1)
+            else:
+                if progress_cb:
+                    progress_cb(
+                        f"  Scene {scene.index}: {scene.duration:.1f}s OK "
+                        f"(speech {speech_dur:.1f}s fits)"
+                    )
+
+        except Exception as e:
+            log.warning("TTS sync failed for scene %d: %s — keeping original duration", scene.index, e)
+            if progress_cb:
+                progress_cb(f"  Scene {scene.index}: sync failed, keeping {scene.duration}s")
+
+    # Cleanup
+    import shutil
+    shutil.rmtree(tmpdir, ignore_errors=True)
+
+    total_dur = sum(s.duration for s in scenes)
+    if progress_cb:
+        progress_cb(f"  ✓ Total duration after sync: {total_dur:.0f}s")
+
+    return scenes
 
 
 def _make_scene_audio(

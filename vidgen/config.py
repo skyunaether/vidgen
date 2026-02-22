@@ -36,6 +36,11 @@ KB_ZOOM_MAX = 1.08  # 8% zoom
 TEXT_FONT_SIZE = 42
 TEXT_SHADOW_OFFSET = 3
 
+# Narration timing sync
+NARRATION_LEAD_IN = 0.6         # silence before speech starts (seconds)
+NARRATION_PADDING_AFTER = 1.0   # silence after speech ends (seconds)
+# Total scene duration = lead_in + speech_duration + padding_after
+
 # Retry
 MAX_RETRIES = 3
 RETRY_DELAY = 5  # seconds
