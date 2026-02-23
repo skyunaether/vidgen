@@ -22,6 +22,10 @@ VOICE_PRESETS: dict[str, tuple[str, str, str]] = {
     "soft":        ("en-US-AriaNeural",    "-10%", "-2Hz"),
     "australian":  ("en-AU-WilliamNeural", "-5%",  "-3Hz"),
     "tony":        ("en-US-TonyNeural",    "-5%",  "-3Hz"),
+    "andrew":      ("en-US-AndrewNeural",  "+0%",  "+0Hz"),
+    "brian":       ("en-US-BrianNeural",   "+0%",  "+0Hz"),
+    "roger":       ("en-US-RogerNeural",   "-5%",  "-2Hz"),
+    "eric":        ("en-US-EricNeural",    "-5%",  "-3Hz"),
 }
 
 

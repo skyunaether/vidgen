@@ -9,6 +9,9 @@ Usage:
 import sys
 from pathlib import Path
 
+# Unbuffered output so progress is visible when stdout is redirected
+sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 from vidgen.batchutil import resolve_md_paths
