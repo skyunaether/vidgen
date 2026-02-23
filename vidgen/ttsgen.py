@@ -1,12 +1,14 @@
-"""Narrator voice generation using gTTS (Google Text-to-Speech).
+"""Narrator voice generation using Microsoft Edge TTS (neural voices).
 
-Generates per-scene narration audio, times each clip to its scene duration,
-then assembles a single narrator track that matches the full video timeline.
+Generates per-scene narration audio using natural, high-quality neural voices,
+times each clip to its scene duration, then assembles a single narrator track
+that matches the full video timeline.
 """
 from __future__ import annotations
 
-import io
+import asyncio
 import logging
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -17,15 +19,28 @@ from .scriptgen import Scene
 
 log = logging.getLogger(__name__)
 
+# Edge TTS voice — deep, authoritative, sensational documentary style.
+# Alternatives: "en-US-DavisNeural" (dramatic), "en-US-AriaNeural" (expressive female)
+EDGE_TTS_VOICE = "en-US-GuyNeural"
+EDGE_TTS_RATE  = "-8%"    # slightly slower for gravitas
+EDGE_TTS_PITCH = "-5Hz"   # slightly lower pitch for depth
 
-def _gtts_to_mp3(text: str) -> bytes:
-    """Convert text to MP3 bytes via gTTS."""
-    from gtts import gTTS
 
-    tts = gTTS(text=text, lang="en", slow=False)
-    buf = io.BytesIO()
-    tts.write_to_fp(buf)
-    return buf.getvalue()
+async def _edge_tts_to_mp3_async(text: str, output_path: Path) -> None:
+    """Generate MP3 from text using Microsoft Edge TTS (async)."""
+    import edge_tts
+    communicate = edge_tts.Communicate(
+        text,
+        voice=EDGE_TTS_VOICE,
+        rate=EDGE_TTS_RATE,
+        pitch=EDGE_TTS_PITCH,
+    )
+    await communicate.save(str(output_path))
+
+
+def _edge_tts_to_mp3(text: str, output_path: Path) -> None:
+    """Generate MP3 from text using Microsoft Edge TTS (sync wrapper)."""
+    asyncio.run(_edge_tts_to_mp3_async(text, output_path))
 
 
 def _mp3_duration(mp3_path: Path) -> float:
@@ -38,7 +53,10 @@ def _mp3_duration(mp3_path: Path) -> float:
     ]
     result = subprocess.run(cmd, capture_output=True, timeout=15)
     if result.returncode == 0:
-        return float(result.stdout.strip())
+        try:
+            return float(result.stdout.strip())
+        except ValueError:
+            pass
     return 0.0
 
 
@@ -54,13 +72,6 @@ def sync_scene_durations_to_narration(
       3. Adjust scene.duration = max(original, lead_in + speech + padding_after)
 
     This ensures narration is never cut off mid-sentence.
-
-    Args:
-        scenes: List of Scene objects (will be modified in-place).
-        progress_cb: Progress callback.
-
-    Returns:
-        The same scenes list (modified in-place).
     """
     if progress_cb:
         progress_cb("🎙️  Syncing scene durations to narration timing...")
@@ -69,18 +80,12 @@ def sync_scene_durations_to_narration(
 
     for scene in scenes:
         try:
-            # Generate TTS MP3
-            mp3_bytes = _gtts_to_mp3(scene.narration)
             mp3_path = tmpdir / f"sync_{scene.index:03d}.mp3"
-            mp3_path.write_bytes(mp3_bytes)
+            _edge_tts_to_mp3(scene.narration, mp3_path)
 
-            # Measure actual speech duration
             speech_dur = _mp3_duration(mp3_path)
-
-            # Calculate required scene duration
             required_dur = NARRATION_LEAD_IN + speech_dur + NARRATION_PADDING_AFTER
 
-            # Adjust if needed
             if scene.duration < required_dur:
                 if progress_cb:
                     progress_cb(
@@ -98,10 +103,8 @@ def sync_scene_durations_to_narration(
         except Exception as e:
             log.warning("TTS sync failed for scene %d: %s — keeping original duration", scene.index, e)
             if progress_cb:
-                progress_cb(f"  Scene {scene.index}: sync failed, keeping {scene.duration}s")
+                progress_cb(f"  Scene {scene.index}: sync failed ({e}), keeping {scene.duration}s")
 
-    # Cleanup
-    import shutil
     shutil.rmtree(tmpdir, ignore_errors=True)
 
     total_dur = sum(s.duration for s in scenes)
@@ -125,12 +128,8 @@ def _make_scene_audio(
     speech_dur = _mp3_duration(narration_mp3)
     available = max(0.0, scene_duration - lead_in)
     trim_dur = min(speech_dur, available)
-
-    # Build filter: silence pad before + narration (trimmed) + silence after
     silence_after = max(0.0, scene_duration - lead_in - trim_dur)
 
-    # Use ffmpeg adelay + atrim + apad to build the final clip
-    # Pipeline: decode mp3 → trim to available → delay by lead_in → pad to scene_duration
     filter_complex = (
         f"[0:a]atrim=0:{trim_dur},asetpts=PTS-STARTPTS[speech];"
         f"aevalsrc=0:d={lead_in}[silence_before];"
@@ -151,7 +150,6 @@ def _make_scene_audio(
     result = subprocess.run(cmd, capture_output=True, timeout=60)
     if result.returncode != 0:
         log.warning("scene audio build failed: %s", result.stderr.decode(errors="replace")[-300:])
-        # Fallback: silence of scene_duration
         _make_silence(output_wav, scene_duration)
     return output_wav
 
@@ -161,7 +159,7 @@ def _make_silence(output_wav: Path, duration: float) -> Path:
     output_wav.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         "ffmpeg", "-y",
-        "-f", "lavfi", "-i", f"anullsrc=r=44100:cl=mono",
+        "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
         "-t", str(duration),
         str(output_wav),
     ]
@@ -179,15 +177,6 @@ def generate_narration_track(
 
     Each scene's narration is spoken at the right time offset, padded with
     silence to fill the scene duration, then all scenes are concatenated.
-
-    Args:
-        scene_narrations: Narration text per scene (in order).
-        scene_durations: Duration in seconds per scene (same order).
-        output_path: Where to save the final narrator WAV.
-        progress_cb: Progress callback.
-
-    Returns:
-        Path to the narrator WAV file.
     """
     assert len(scene_narrations) == len(scene_durations), "mismatch"
 
@@ -199,12 +188,9 @@ def generate_narration_track(
             progress_cb(f"  Narrating scene {i}: \"{text[:50]}{'...' if len(text) > 50 else ''}\"")
 
         try:
-            # Generate TTS audio
-            mp3_bytes = _gtts_to_mp3(text)
             mp3_path = tmpdir / f"speech_{i:03d}.mp3"
-            mp3_path.write_bytes(mp3_bytes)
+            _edge_tts_to_mp3(text, mp3_path)
 
-            # Build timed scene audio (lead-in + speech + padding)
             wav_path = tmpdir / f"scene_{i:03d}.wav"
             _make_scene_audio(mp3_path, dur, wav_path)
             scene_wavs.append(wav_path)
@@ -223,7 +209,6 @@ def generate_narration_track(
     if progress_cb:
         progress_cb("  Assembling full narration timeline...")
 
-    # Concatenate all scene wavs into one continuous track
     list_file = tmpdir / "narration_list.txt"
     with open(list_file, "w") as f:
         for wav in scene_wavs:
@@ -246,6 +231,6 @@ def generate_narration_track(
     if progress_cb:
         size_kb = output_path.stat().st_size // 1024
         total_dur = sum(scene_durations)
-        progress_cb(f"  ✓ Narration track: {total_dur:.0f}s · {size_kb} KB")
+        progress_cb(f"  ✓ Narration track ({EDGE_TTS_VOICE}): {total_dur:.0f}s · {size_kb} KB")
 
     return output_path
