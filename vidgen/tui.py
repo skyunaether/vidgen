@@ -23,7 +23,7 @@ from textual.widgets import (
 
 from .config import Config
 from .pipeline import Pipeline, PipelineCancelled
-from .scriptgen import parse_markdown_story, parse_user_story
+from .scriptgen import StorySettings, parse_markdown_story, parse_user_story
 from .batchutil import resolve_md_paths as _resolve_md_paths
 
 # Regex to detect stage-header lines like "📝 Stage 1/5: ..."
@@ -467,6 +467,7 @@ class VidGenApp(App):
         prompt: str,
         use_placeholders: bool,
         scenes=None,
+        settings: StorySettings | None = None,
     ) -> None:
         self._set_running(True)
         self._cancel_requested.clear()
@@ -505,7 +506,7 @@ class VidGenApp(App):
             use_placeholders=use_placeholders,
         )
         if scenes is not None:
-            self._pipeline.inject_scenes(scenes)
+            self._pipeline.inject_scenes(scenes, settings=settings)
 
         thread = threading.Thread(
             target=self._run_single_thread,
@@ -580,7 +581,7 @@ class VidGenApp(App):
             # Parse markdown
             try:
                 md_text = md_path.read_text(encoding="utf-8")
-                title, scenes = parse_markdown_story(md_text)
+                title, scenes, settings = parse_markdown_story(md_text)
             except Exception as e:
                 msg = f"Parse error in {md_path.name}: {e}"
                 self._log(f"[red]  ✗ {msg}[/red]")
@@ -597,7 +598,7 @@ class VidGenApp(App):
                 progress_cb=self._log,
                 use_placeholders=use_placeholders,
             )
-            self._pipeline.inject_scenes(scenes)
+            self._pipeline.inject_scenes(scenes, settings=settings)
 
             prompt_for_mood = title or md_path.stem.replace("_", " ").replace("-", " ")
 

@@ -26,21 +26,28 @@ EDGE_TTS_RATE  = "-8%"    # slightly slower for gravitas
 EDGE_TTS_PITCH = "-5Hz"   # slightly lower pitch for depth
 
 
-async def _edge_tts_to_mp3_async(text: str, output_path: Path) -> None:
+async def _edge_tts_to_mp3_async(
+    text: str,
+    output_path: Path,
+    voice: str = EDGE_TTS_VOICE,
+    rate: str = EDGE_TTS_RATE,
+    pitch: str = EDGE_TTS_PITCH,
+) -> None:
     """Generate MP3 from text using Microsoft Edge TTS (async)."""
     import edge_tts
-    communicate = edge_tts.Communicate(
-        text,
-        voice=EDGE_TTS_VOICE,
-        rate=EDGE_TTS_RATE,
-        pitch=EDGE_TTS_PITCH,
-    )
+    communicate = edge_tts.Communicate(text, voice=voice, rate=rate, pitch=pitch)
     await communicate.save(str(output_path))
 
 
-def _edge_tts_to_mp3(text: str, output_path: Path) -> None:
+def _edge_tts_to_mp3(
+    text: str,
+    output_path: Path,
+    voice: str = EDGE_TTS_VOICE,
+    rate: str = EDGE_TTS_RATE,
+    pitch: str = EDGE_TTS_PITCH,
+) -> None:
     """Generate MP3 from text using Microsoft Edge TTS (sync wrapper)."""
-    asyncio.run(_edge_tts_to_mp3_async(text, output_path))
+    asyncio.run(_edge_tts_to_mp3_async(text, output_path, voice, rate, pitch))
 
 
 def _mp3_duration(mp3_path: Path) -> float:
@@ -63,6 +70,9 @@ def _mp3_duration(mp3_path: Path) -> float:
 def sync_scene_durations_to_narration(
     scenes: list[Scene],
     progress_cb: Callable[[str], None] | None = None,
+    voice: str = EDGE_TTS_VOICE,
+    rate: str = EDGE_TTS_RATE,
+    pitch: str = EDGE_TTS_PITCH,
 ) -> list[Scene]:
     """Measure actual TTS narration duration and adjust scene durations to fit.
 
@@ -81,7 +91,7 @@ def sync_scene_durations_to_narration(
     for scene in scenes:
         try:
             mp3_path = tmpdir / f"sync_{scene.index:03d}.mp3"
-            _edge_tts_to_mp3(scene.narration, mp3_path)
+            _edge_tts_to_mp3(scene.narration, mp3_path, voice=voice, rate=rate, pitch=pitch)
 
             speech_dur = _mp3_duration(mp3_path)
             required_dur = NARRATION_LEAD_IN + speech_dur + NARRATION_PADDING_AFTER
@@ -172,6 +182,9 @@ def generate_narration_track(
     scene_durations: list[float],
     output_path: Path,
     progress_cb: Callable[[str], None] | None = None,
+    voice: str = EDGE_TTS_VOICE,
+    rate: str = EDGE_TTS_RATE,
+    pitch: str = EDGE_TTS_PITCH,
 ) -> Path:
     """Generate a complete narrator audio track for the whole video.
 
@@ -189,7 +202,7 @@ def generate_narration_track(
 
         try:
             mp3_path = tmpdir / f"speech_{i:03d}.mp3"
-            _edge_tts_to_mp3(text, mp3_path)
+            _edge_tts_to_mp3(text, mp3_path, voice=voice, rate=rate, pitch=pitch)
 
             wav_path = tmpdir / f"scene_{i:03d}.wav"
             _make_scene_audio(mp3_path, dur, wav_path)
@@ -231,6 +244,6 @@ def generate_narration_track(
     if progress_cb:
         size_kb = output_path.stat().st_size // 1024
         total_dur = sum(scene_durations)
-        progress_cb(f"  ✓ Narration track ({EDGE_TTS_VOICE}): {total_dur:.0f}s · {size_kb} KB")
+        progress_cb(f"  ✓ Narration track ({voice}): {total_dur:.0f}s · {size_kb} KB")
 
     return output_path

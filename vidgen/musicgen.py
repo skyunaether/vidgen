@@ -19,12 +19,45 @@ log = logging.getLogger(__name__)
 SR = 44100  # sample rate
 
 # ---------------------------------------------------------------------------
-# Tempo — slow and meditative for peace and harmony
+# Music style presets
+# Each entry maps recognized keywords → generation parameters:
+#   bpm      — tempo
+#   erhu     — erhu melody gain
+#   guzheng  — guzheng pluck gain
+#   dizi     — dizi flute gain
+#   drone    — tonic drone gain
 # ---------------------------------------------------------------------------
 
+_STYLE_PARAMS: dict[str, dict] = {
+    "epic":        {"bpm": 80, "erhu": 1.25, "guzheng": 1.00, "dizi": 0.30, "drone": 0.50},
+    "dramatic":    {"bpm": 76, "erhu": 1.30, "guzheng": 0.90, "dizi": 0.25, "drone": 0.50},
+    "orchestral":  {"bpm": 80, "erhu": 1.20, "guzheng": 1.00, "dizi": 0.30, "drone": 0.48},
+    "ambient":     {"bpm": 48, "erhu": 0.70, "guzheng": 0.50, "dizi": 0.90, "drone": 0.60},
+    "meditation":  {"bpm": 46, "erhu": 0.60, "guzheng": 0.40, "dizi": 1.00, "drone": 0.65},
+    "zen":         {"bpm": 46, "erhu": 0.55, "guzheng": 0.40, "dizi": 1.00, "drone": 0.65},
+    "calm":        {"bpm": 52, "erhu": 0.80, "guzheng": 0.60, "dizi": 0.80, "drone": 0.55},
+    "peaceful":    {"bpm": 60, "erhu": 1.00, "guzheng": 0.70, "dizi": 0.55, "drone": 0.38},
+    "traditional": {"bpm": 60, "erhu": 1.00, "guzheng": 0.70, "dizi": 0.55, "drone": 0.38},
+    "chinese":     {"bpm": 60, "erhu": 1.00, "guzheng": 0.70, "dizi": 0.55, "drone": 0.38},
+    "harmony":     {"bpm": 58, "erhu": 0.90, "guzheng": 0.80, "dizi": 0.65, "drone": 0.45},
+    "sad":         {"bpm": 52, "erhu": 1.10, "guzheng": 0.50, "dizi": 0.70, "drone": 0.50},
+    "melancholic": {"bpm": 50, "erhu": 1.15, "guzheng": 0.45, "dizi": 0.65, "drone": 0.55},
+}
+_DEFAULT_PARAMS: dict = {"bpm": 60, "erhu": 1.0, "guzheng": 0.7, "dizi": 0.55, "drone": 0.38}
+
+# Informational defaults (not used by layers — computed from style params instead)
 BPM  = 60
-BEAT = 60.0 / BPM   # 1.0 s per beat
-BAR  = BEAT * 4     # 4.0 s per bar
+BEAT = 60.0 / BPM
+BAR  = BEAT * 4
+
+
+def _resolve_style(mood: str) -> dict:
+    """Match a freeform mood/style string to a parameter set."""
+    lower = mood.lower()
+    for key, params in _STYLE_PARAMS.items():
+        if key in lower:
+            return params
+    return _DEFAULT_PARAMS
 
 
 # ---------------------------------------------------------------------------
@@ -214,50 +247,51 @@ def _place_notes(
     start_beat: float,
     voice_fn,
     gain: float,
+    beat: float,
     sr: int = SR,
 ) -> None:
     """Render (beat_offset, note, dur_beats) tuples into buf starting at start_beat."""
     for beat_off, note, dur_b in notes:
-        t0 = int((start_beat + beat_off) * BEAT * sr)
+        t0 = int((start_beat + beat_off) * beat * sr)
         if t0 >= len(buf):
             continue
-        dur_s = dur_b * BEAT
+        dur_s = dur_b * beat
         sig = voice_fn(_p(note), dur_s, sr)
         end = min(t0 + len(sig), len(buf))
         buf[t0:end] += gain * sig[:end - t0]
 
 
-def _erhu_layer(n_beats: float, sr: int = SR) -> np.ndarray:
-    buf = np.zeros(int(sr * n_beats * BEAT), dtype=np.float32)
+def _erhu_layer(n_beats: float, beat: float, sr: int = SR) -> np.ndarray:
+    buf = np.zeros(int(sr * n_beats * beat), dtype=np.float32)
     start = 0.0
     while start < n_beats:
-        _place_notes(buf, _ERHU_PHRASE, start, _erhu, gain=1.0, sr=sr)
+        _place_notes(buf, _ERHU_PHRASE, start, _erhu, gain=1.0, beat=beat, sr=sr)
         start += _PHRASE_BEATS
     return buf
 
 
-def _guzheng_layer(n_beats: float, sr: int = SR) -> np.ndarray:
-    buf = np.zeros(int(sr * n_beats * BEAT), dtype=np.float32)
+def _guzheng_layer(n_beats: float, beat: float, sr: int = SR) -> np.ndarray:
+    buf = np.zeros(int(sr * n_beats * beat), dtype=np.float32)
     n_bars = int(n_beats / 4)
     for bar in range(n_bars):
         pattern = _GUZHENG_PATTERNS[bar % len(_GUZHENG_PATTERNS)]
-        _place_notes(buf, pattern, float(bar * 4), _guzheng, gain=0.70, sr=sr)
+        _place_notes(buf, pattern, float(bar * 4), _guzheng, gain=0.70, beat=beat, sr=sr)
     return buf
 
 
-def _dizi_layer(n_beats: float, sr: int = SR) -> np.ndarray:
-    buf = np.zeros(int(sr * n_beats * BEAT), dtype=np.float32)
+def _dizi_layer(n_beats: float, beat: float, sr: int = SR) -> np.ndarray:
+    buf = np.zeros(int(sr * n_beats * beat), dtype=np.float32)
     for phrase_start in range(0, int(n_beats), _PHRASE_BEATS):
         for i, phrase in enumerate(_DIZI_PHRASES):
             beat_offset = phrase_start + 16 + i * 8
             if beat_offset < n_beats:
-                _place_notes(buf, phrase, float(beat_offset), _dizi, gain=0.55, sr=sr)
+                _place_notes(buf, phrase, float(beat_offset), _dizi, gain=0.55, beat=beat, sr=sr)
     return buf
 
 
-def _drone_layer(n_beats: float, sr: int = SR) -> np.ndarray:
+def _drone_layer(n_beats: float, beat: float, sr: int = SR) -> np.ndarray:
     """Continuous tonic (D2) + fifth (A2) drone beneath everything."""
-    dur_s = n_beats * BEAT
+    dur_s = n_beats * beat
     n = int(sr * dur_s)
     buf = np.zeros(n, dtype=np.float32)
     seg = _drone_note(_p("D2"), dur_s, sr)
@@ -310,20 +344,25 @@ def generate_music(
     Returns:
         Path to the generated WAV file.
     """
-    if progress_cb:
-        progress_cb(f"  Composing background music ({duration:.0f}s, {BPM} BPM)...")
+    params  = _resolve_style(mood)
+    bpm     = params["bpm"]
+    beat    = 60.0 / bpm
+    bar     = beat * 4
 
-    log.info("Generating Chinese traditional background music, %.0f seconds", duration)
+    if progress_cb:
+        progress_cb(f"  Composing background music ({duration:.0f}s, {bpm} BPM, style: {mood})...")
+
+    log.info("Generating background music — style=%r bpm=%d dur=%.0f s", mood, bpm, duration)
 
     # Round up to whole bars
-    n_bars  = max(4, int(np.ceil(duration / BAR)))
+    n_bars  = max(4, int(np.ceil(duration / bar)))
     n_beats = float(n_bars * 4)
-    dur     = n_beats * BEAT
+    dur     = n_beats * beat
 
-    erhu    = _erhu_layer(n_beats)
-    guzheng = _guzheng_layer(n_beats)
-    dizi    = _dizi_layer(n_beats)
-    drone   = _drone_layer(n_beats)
+    erhu    = _erhu_layer(n_beats, beat)    * params["erhu"]
+    guzheng = _guzheng_layer(n_beats, beat) * params["guzheng"]
+    dizi    = _dizi_layer(n_beats, beat)    * params["dizi"]
+    drone   = _drone_layer(n_beats, beat)   * params["drone"]
 
     mix = erhu + guzheng + dizi + drone
     mix *= _dynamics_envelope(len(mix))

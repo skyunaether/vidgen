@@ -63,9 +63,11 @@ def main() -> None:
 
         try:
             text = md_path.read_text(encoding="utf-8")
-            title, scenes = parse_markdown_story(text)
+            title, scenes, settings = parse_markdown_story(text)
             print(f"  Title : {title or '(untitled)'}")
             print(f"  Scenes: {len(scenes)}, ~{sum(s.duration for s in scenes):.0f}s total")
+            print(f"  Music : {settings.music_style}")
+            print(f"  Voice : {settings.voice} (rate {settings.voice_rate}, pitch {settings.voice_pitch})")
         except Exception as e:
             print(f"  ERROR (parse): {e}")
             failed += 1
@@ -76,7 +78,7 @@ def main() -> None:
             progress_cb=lambda msg: print(f"  {msg}"),
             use_placeholders=use_placeholders,
         )
-        pipeline.inject_scenes(scenes)
+        pipeline.inject_scenes(scenes, settings=settings)
 
         try:
             output = pipeline.run(title or md_path.stem)
