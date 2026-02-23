@@ -263,8 +263,25 @@ def compile_video(
 
         merged = tmp / "merged.mp4"
 
-        # Step 3: Mix audio (narrator + music)
+        # Step 3: Extend last frame to cover any duration lost through crossfades.
+        # Crossfades shorten the video by (N-1)*fade_dur; the narration track is
+        # built on the full un-faded durations, so we freeze the last frame to
+        # close the gap and prevent the last scene from being cut short.
         narration_path = Path(narration) if narration and Path(narration).exists() else None
+        if narration_path:
+            narr_dur = _get_duration(narration_path)
+            vid_dur  = _get_duration(merged)
+            if narr_dur > vid_dur + 0.1:
+                extended = tmp / "merged_extended.mp4"
+                if progress_cb:
+                    progress_cb(
+                        f"  Extending last frame by {narr_dur - vid_dur:.1f}s "
+                        f"to match narration ({vid_dur:.1f}s → {narr_dur:.1f}s)..."
+                    )
+                _freeze_extend_video(merged, extended, narr_dur)
+                merged = extended
+
+        # Step 4: Mix audio (narrator + music)
         music_path = Path(bg_music) if bg_music and Path(bg_music).exists() else None
 
         if narration_path:
@@ -294,7 +311,7 @@ def compile_video(
 
 
 def _get_duration(clip_path: Path) -> float:
-    """Get actual duration of a video clip using ffprobe."""
+    """Get actual duration of a video or audio file using ffprobe."""
     cmd = [
         "ffprobe", "-v", "quiet", "-print_format", "json",
         "-show_format", str(clip_path),
@@ -305,6 +322,36 @@ def _get_duration(clip_path: Path) -> float:
         data = json.loads(result.stdout)
         return float(data["format"]["duration"])
     return 10.0  # fallback
+
+
+def _freeze_extend_video(video: Path, output: Path, target_dur: float) -> None:
+    """Extend video to target_dur by freezing (looping) the last frame.
+
+    Used to compensate for the cumulative time lost by crossfade transitions so
+    that the merged video duration matches the narration track duration, preventing
+    the last scene from being cut short when audio is mixed.
+    """
+    current_dur = _get_duration(video)
+    extra = target_dur - current_dur
+    if extra <= 0.05:          # already long enough
+        shutil.copy2(video, output)
+        return
+
+    log.debug("Freeze-extending video by %.2fs (%.2fs → %.2fs)", extra, current_dur, target_dur)
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(video),
+        "-vf", f"tpad=stop_mode=clone:stop_duration={extra:.3f}",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-an",
+        str(output),
+    ]
+    result = subprocess.run(cmd, capture_output=True, timeout=300)
+    if result.returncode != 0:
+        log.warning("freeze-extend failed, copying original: %s",
+                    result.stderr.decode(errors="replace")[-300:])
+        shutil.copy2(video, output)
 
 
 def _concat_with_xfade(
@@ -410,15 +457,17 @@ def _simple_concat(clip_paths: list[Path], output: Path) -> None:
 
 def _add_audio(video: Path, audio: Path, output: Path) -> None:
     """Mix background-only audio into video (loops if shorter than video)."""
+    vid_dur = _get_duration(video)
     cmd = [
         "ffmpeg", "-y",
         "-i", str(video),
         "-i", str(audio),
         "-c:v", "copy",
         "-c:a", "aac", "-b:a", "192k",
-        "-filter_complex", "[1:a]aloop=loop=-1:size=2e+09,volume=0.18[bg];[bg]atrim=0:duration=130[a]",
+        "-filter_complex",
+        f"[1:a]aloop=loop=-1:size=2e+09,volume=0.18,atrim=0:{vid_dur:.3f}[a]",
         "-map", "0:v", "-map", "[a]",
-        "-shortest",
+        "-t", f"{vid_dur:.3f}",
         str(output),
     ]
     subprocess.run(cmd, capture_output=True, check=True, timeout=300)
@@ -435,6 +484,10 @@ def _mix_audio_tracks(
     Narrator is full volume; music is ducked to 15% so the voice is clear.
     Music loops if shorter than the video.
     """
+    # Get video duration to trim/pad audio precisely — no -shortest needed
+    # because we already extended the video to match narration length.
+    vid_dur = _get_duration(video)
+
     if music is None:
         # Narrator only — no background music
         cmd = [
@@ -443,9 +496,10 @@ def _mix_audio_tracks(
             "-i", str(narration),
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", "192k",
-            "-filter_complex", "[1:a]volume=1.0[narrator];[narrator]atrim=0:duration=130[a]",
+            "-filter_complex",
+            f"[1:a]volume=1.0,atrim=0:{vid_dur:.3f},asetpts=PTS-STARTPTS[a]",
             "-map", "0:v", "-map", "[a]",
-            "-shortest",
+            "-t", f"{vid_dur:.3f}",
             str(output),
         ]
     else:
@@ -458,12 +512,12 @@ def _mix_audio_tracks(
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", "192k",
             "-filter_complex", (
-                "[1:a]volume=1.0[narrator];"
-                "[2:a]aloop=loop=-1:size=2e+09,volume=0.15,atrim=0:duration=130[music];"
+                f"[1:a]volume=1.0,atrim=0:{vid_dur:.3f},asetpts=PTS-STARTPTS[narrator];"
+                f"[2:a]aloop=loop=-1:size=2e+09,volume=0.15,atrim=0:{vid_dur:.3f}[music];"
                 "[narrator][music]amix=inputs=2:duration=first:dropout_transition=2[a]"
             ),
             "-map", "0:v", "-map", "[a]",
-            "-shortest",
+            "-t", f"{vid_dur:.3f}",
             str(output),
         ]
     result = subprocess.run(cmd, capture_output=True, timeout=300)
