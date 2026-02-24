@@ -1,15 +1,63 @@
 # A Man Who Learned to Fly
 
-<!-- This is the vidgen markdown story format.
-     Copy this file, edit the scenes, then point the TUI at it.
-     Supported fields per scene:
-       Narration: <spoken text>           (required)
-       Visual:    <image prompt>          (required)
-       Duration:  <seconds>               (optional, default 10)
-       Type:      image | video           (optional, default image)
-     You can also embed duration and type in the ## heading:
+<!-- ═══════════════════════════════════════════════════════════
+     vidgen story template
+     ─────────────────────────────────────────────────────────
+     AUDIO SETTINGS  (place before the first ## Scene heading)
+     ─────────────────────────────────────────────────────────
+     Music:        Freeform description of the background music style.
+                   Keywords that are recognised and mapped to generation
+                   parameters (any unrecognised value falls back to the
+                   default peaceful Chinese style):
+
+                     peaceful / chinese / traditional — meditative erhu melody, 60 BPM
+                     epic / dramatic / orchestral     — louder, faster (76–80 BPM)
+                     ambient / calm                   — spacious, drone-heavy, slow (48–52 BPM)
+                     meditation / zen                 — very slow, flute-forward (46 BPM)
+                     sad / melancholic                — slower, mournful erhu (50–52 BPM)
+                     harmony                          — balanced blend, 58 BPM
+
+                   Examples:
+                     Music: epic orchestral
+                     Music: peaceful chinese traditional
+                     Music: ambient meditation
+
+     Voice:        Narrator voice. Use a preset name or a raw Edge TTS voice ID.
+
+                   Preset names:
+                     documentary  — en-US-GuyNeural,   deep authoritative male  (default)
+                     dramatic     — en-US-DavisNeural, intense dramatic male
+                     female       — en-US-AriaNeural,  expressive female
+                     british      — en-GB-RyanNeural,  calm British male
+                     friendly     — en-US-JennyNeural, warm conversational female
+                     soft         — en-US-AriaNeural,  soft slow female
+                     australian   — en-AU-WilliamNeural, Australian male
+                     tony         — en-US-TonyNeural,  confident male
+
+                   Raw Edge TTS voice ID (overrides preset defaults):
+                     Voice: en-US-GuyNeural
+
+     Voice-Rate:   Speaking speed adjustment. Negative = slower, positive = faster.
+                   Examples: -8%  -15%  +5%
+                   (Optional — overrides the rate from the Voice preset.)
+
+     Voice-Pitch:  Pitch shift. Negative = lower, positive = higher.
+                   Examples: -5Hz  -10Hz  +3Hz
+                   (Optional — overrides the pitch from the Voice preset.)
+
+     SCENE FIELDS  (inside each ## heading)
+     ─────────────────────────────────────────────────────────
+     Narration:    Spoken text for this scene.           (required)
+     Visual:       Image generation prompt.              (required)
+     Duration:     Scene length in seconds.              (optional, default 10)
+     Type:         image | video                         (optional, default image)
+
+     Duration and Type can also be embedded in the ## heading:
        ## Scene 1 (8s, image)
--->
+     ═══════════════════════════════════════════════════════════ -->
+
+Music: epic orchestral
+Voice: dramatic
 
 ## Scene 1 (8s, image)
 Narration: Some dreams are too powerful to stay on the ground.

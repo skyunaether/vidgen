@@ -23,7 +23,8 @@ from textual.widgets import (
 
 from .config import Config
 from .pipeline import Pipeline, PipelineCancelled
-from .scriptgen import parse_markdown_story, parse_user_story
+from .scriptgen import StorySettings, parse_markdown_story, parse_user_story
+from .batchutil import resolve_md_paths as _resolve_md_paths
 
 # Regex to detect stage-header lines like "📝 Stage 1/5: ..."
 _STAGE_RE = re.compile(r"Stage\s+(\d+(?:\.\d+)?)/5[:\s]+(.*)", re.IGNORECASE)
@@ -256,11 +257,11 @@ class VidGenApp(App):
             # --- Markdown files section (hidden by default) ---
             with Vertical(id="files-section"):
                 yield Label(
-                    "Enter a path to a [bold].md[/bold] story file or a directory of "
-                    "[bold].md[/bold] files.\n"
-                    "  • Single file  → 1 video\n"
-                    "  • Directory   → 1 video per [bold].md[/bold] file (processed sequentially)\n"
-                    "  • Comma-separated paths → multiple files\n\n"
+                    "Enter a path to a [bold].md[/bold] story file, directory, or [bold]glob pattern[/bold].\n"
+                    "  • Single file:  ~/stories/my_story.md\n"
+                    "  • Directory:   ~/stories/ (processes all [bold].md[/bold] files)\n"
+                    "  • Glob pattern: ~/stories/zodiac*.md\n"
+                    "  • Multiple:    path1.md,path2.md (comma-separated)\n\n"
                     "See [bold]assets/story_template.md[/bold] for the expected format.",
                     id="files-hint",
                     markup=True,
@@ -466,6 +467,7 @@ class VidGenApp(App):
         prompt: str,
         use_placeholders: bool,
         scenes=None,
+        settings: StorySettings | None = None,
     ) -> None:
         self._set_running(True)
         self._cancel_requested.clear()
@@ -504,7 +506,7 @@ class VidGenApp(App):
             use_placeholders=use_placeholders,
         )
         if scenes is not None:
-            self._pipeline.inject_scenes(scenes)
+            self._pipeline.inject_scenes(scenes, settings=settings)
 
         thread = threading.Thread(
             target=self._run_single_thread,
@@ -579,7 +581,7 @@ class VidGenApp(App):
             # Parse markdown
             try:
                 md_text = md_path.read_text(encoding="utf-8")
-                title, scenes = parse_markdown_story(md_text)
+                title, scenes, settings = parse_markdown_story(md_text)
             except Exception as e:
                 msg = f"Parse error in {md_path.name}: {e}"
                 self._log(f"[red]  ✗ {msg}[/red]")
@@ -596,7 +598,7 @@ class VidGenApp(App):
                 progress_cb=self._log,
                 use_placeholders=use_placeholders,
             )
-            self._pipeline.inject_scenes(scenes)
+            self._pipeline.inject_scenes(scenes, settings=settings)
 
             prompt_for_mood = title or md_path.stem.replace("_", " ").replace("-", " ")
 
@@ -636,25 +638,3 @@ class VidGenApp(App):
         self._set_status(status)
         self._set_running(False)
 
-
-# ------------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------------
-
-def _resolve_md_paths(raw: str) -> list[Path]:
-    """Expand a comma-separated path string into a sorted list of .md files."""
-    files: list[Path] = []
-    for entry in raw.split(","):
-        p = Path(entry.strip()).expanduser().resolve()
-        if p.is_dir():
-            files.extend(sorted(p.glob("*.md")))
-        elif p.is_file() and p.suffix.lower() == ".md":
-            files.append(p)
-    # Deduplicate while preserving order
-    seen: set[Path] = set()
-    unique: list[Path] = []
-    for f in files:
-        if f not in seen:
-            seen.add(f)
-            unique.append(f)
-    return unique

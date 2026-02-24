@@ -4,9 +4,47 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 TARGET_DURATION = 120  # ~2 minutes total
+
+# ---------------------------------------------------------------------------
+# Voice presets — friendly names for Edge TTS voices
+# ---------------------------------------------------------------------------
+
+# Maps lowercase preset name → (edge_tts_voice_id, rate, pitch)
+VOICE_PRESETS: dict[str, tuple[str, str, str]] = {
+    "documentary": ("en-US-GuyNeural",     "-8%",  "-5Hz"),
+    "dramatic":    ("en-US-DavisNeural",   "-5%",  "-3Hz"),
+    "female":      ("en-US-AriaNeural",    "-5%",  "+0Hz"),
+    "british":     ("en-GB-RyanNeural",    "-5%",  "-3Hz"),
+    "friendly":    ("en-US-JennyNeural",   "+0%",  "+0Hz"),
+    "soft":        ("en-US-AriaNeural",    "-10%", "-2Hz"),
+    "australian":  ("en-AU-WilliamNeural", "-5%",  "-3Hz"),
+    "tony":        ("en-US-TonyNeural",    "-5%",  "-3Hz"),
+    "andrew":      ("en-US-AndrewNeural",  "+0%",  "+0Hz"),
+    "brian":       ("en-US-BrianNeural",   "+0%",  "+0Hz"),
+    "roger":       ("en-US-RogerNeural",   "-5%",  "-2Hz"),
+    "eric":        ("en-US-EricNeural",    "-5%",  "-3Hz"),
+}
+
+
+@dataclass
+class StorySettings:
+    """Per-story audio settings parsed from the markdown preamble.
+
+    Attributes:
+        music_style:  Freeform description used to select music generation
+                      parameters (e.g. "epic orchestral", "peaceful chinese").
+        voice:        Edge TTS voice ID (e.g. "en-US-GuyNeural") or a preset
+                      name from VOICE_PRESETS (e.g. "documentary", "female").
+        voice_rate:   Speaking rate adjustment (e.g. "-8%", "+5%").
+        voice_pitch:  Pitch adjustment (e.g. "-5Hz", "+2Hz").
+    """
+    music_style: str = "chinese traditional"
+    voice:       str = "en-US-GuyNeural"
+    voice_rate:  str = "-8%"
+    voice_pitch: str = "-5Hz"
 
 
 @dataclass
@@ -159,12 +197,15 @@ def script_to_json(scenes: list[Scene]) -> str:
     return json.dumps([s.to_dict() for s in scenes], indent=2)
 
 
-def parse_markdown_story(text: str) -> tuple[str, list[Scene]]:
-    """Parse a markdown story file into a (title, scenes) pair.
+def parse_markdown_story(text: str) -> tuple[str, list[Scene], StorySettings]:
+    """Parse a markdown story file into a ``(title, scenes, settings)`` triple.
 
     Expected format::
 
         # Video Title
+
+        Music: peaceful chinese traditional
+        Voice: documentary
 
         ## Scene 1 (8s, image)
         Narration: Some dreams are too powerful to stay on the ground.
@@ -177,18 +218,28 @@ def parse_markdown_story(text: str) -> tuple[str, list[Scene]]:
         Type: image
 
     Rules:
-    - The first ``# Heading`` becomes the video title (used for music mood).
+    - The first ``# Heading`` becomes the video title.
+    - **Preamble settings** (lines before the first ``##``) may contain:
+
+      - ``Music: <style>``  — freeform music style description, e.g.
+        ``"epic orchestral"``, ``"peaceful chinese"``, ``"ambient"``.
+      - ``Voice: <name>``  — a preset name (``documentary``, ``dramatic``,
+        ``female``, ``british``, ``friendly``, ``soft``, ``australian``,
+        ``tony``) *or* a raw Edge TTS voice ID (e.g. ``en-US-GuyNeural``).
+      - ``Voice-Rate: <rate>``  — speaking rate override, e.g. ``-10%``.
+      - ``Voice-Pitch: <pitch>`` — pitch override, e.g. ``-3Hz``.
+
     - Each ``## Heading`` starts a new scene.  Duration and media type can be
       embedded in the heading like ``(8s, video)`` *or* set with ``Duration:``
       and ``Type:`` fields inside the section.  Inline values override heading.
-    - ``Narration:`` and ``Visual:`` are required per scene; other fields are
-      optional.
+    - ``Narration:`` and ``Visual:`` are required per scene.
     - Lines outside ``##`` sections (e.g. notes, comments) are ignored.
     - If no ``##`` headings are found, the file is parsed as pipe-separated
       lines via :func:`parse_user_story` as a fallback.
 
     Returns:
-        ``(title, scenes)`` — title is the first ``#`` heading (or ``""``).
+        ``(title, scenes, settings)`` — title is the first ``#`` heading
+        (or ``""``), settings hold parsed music/voice preferences.
 
     Raises ``ValueError`` if no valid scenes are found.
     """
@@ -206,7 +257,45 @@ def parse_markdown_story(text: str) -> tuple[str, list[Scene]]:
 
     if len(parts) <= 1:
         # No ## headings — fall back to pipe-separated format
-        return title, parse_user_story(text)
+        return title, parse_user_story(text), StorySettings()
+
+    # -----------------------------------------------------------------------
+    # Parse settings from the preamble (parts[0] = text before first ##)
+    # -----------------------------------------------------------------------
+    settings = StorySettings()
+    _rate_override: str | None = None
+    _pitch_override: str | None = None
+
+    # Strip HTML comments (<!-- ... -->) so template doc blocks don't interfere
+    preamble = re.sub(r"<!--.*?-->", "", parts[0], flags=re.DOTALL)
+
+    for raw in preamble.splitlines():
+        line = re.sub(r"^[-*]\s+", "", raw.strip())  # strip list markers
+        line = re.sub(r"\*+", "", line)               # strip bold markers
+        lower = line.lower()
+
+        if lower.startswith("music:"):
+            settings.music_style = line[len("music:"):].strip()
+
+        elif lower.startswith("voice-rate:"):
+            _rate_override = line[len("voice-rate:"):].strip()
+
+        elif lower.startswith("voice-pitch:"):
+            _pitch_override = line[len("voice-pitch:"):].strip()
+
+        elif lower.startswith("voice:"):
+            val = line[len("voice:"):].strip()
+            preset = VOICE_PRESETS.get(val.lower())
+            if preset:
+                settings.voice, settings.voice_rate, settings.voice_pitch = preset
+            else:
+                settings.voice = val  # treat as raw Edge TTS voice ID
+
+    # Apply rate/pitch overrides (after Voice: so they always win)
+    if _rate_override:
+        settings.voice_rate = _rate_override
+    if _pitch_override:
+        settings.voice_pitch = _pitch_override
 
     scenes: list[Scene] = []
 
@@ -276,7 +365,7 @@ def parse_markdown_story(text: str) -> tuple[str, list[Scene]]:
             "Each scene needs a '## Heading' with 'Narration:' and 'Visual:' fields."
         )
 
-    return title, scenes
+    return title, scenes, settings
 
 
 def parse_user_story(text: str) -> list[Scene]:

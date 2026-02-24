@@ -13,9 +13,9 @@ from .compiler import compile_video
 from .config import Config
 from .imagegen import generate_image, generate_placeholder_image
 from .musicgen import generate_music
-from .scriptgen import Scene, generate_script, parse_markdown_story, parse_user_story, script_to_json
+from .scriptgen import Scene, StorySettings, generate_script, parse_markdown_story, parse_user_story, script_to_json
 from .story_agent import review_and_refine
-from .ttsgen import generate_narration_track
+from .ttsgen import generate_narration_track, sync_scene_durations_to_narration
 from .videogen import generate_placeholder_video, generate_video
 
 log = logging.getLogger(__name__)
@@ -39,6 +39,7 @@ class Pipeline:
         self.use_placeholders = use_placeholders
         self._cancelled = threading.Event()
         self._scenes: list[Scene] = []
+        self._settings: StorySettings = StorySettings()
         self._tmpdir: str | None = None
 
     def cancel(self) -> None:
@@ -56,13 +57,24 @@ class Pipeline:
     def scenes(self) -> list[Scene]:
         return self._scenes
 
-    def inject_scenes(self, scenes: list[Scene]) -> None:
+    def inject_scenes(
+        self,
+        scenes: list[Scene],
+        settings: StorySettings | None = None,
+    ) -> None:
         """Pre-load scenes directly, bypassing script generation and story review.
 
         Call this before ``run()`` to supply a user-provided storyline.
         Stages 1 and 1.5 will be skipped automatically.
+
+        Args:
+            scenes:   Pre-built scene list.
+            settings: Optional per-story audio settings (voice, music style).
+                      Defaults to ``StorySettings()`` if not provided.
         """
         self._scenes = list(scenes)
+        if settings is not None:
+            self._settings = settings
 
     def step_generate_script(self, prompt: str) -> list[Scene]:
         """Stage 1: Generate scene breakdown."""
@@ -188,14 +200,18 @@ class Pipeline:
         if not self._scenes:
             return None
 
+        s = self._settings
         try:
             tmp = Path(self._tmpdir)
             narration_path = tmp / "narration.wav"
-            narrations = [s.narration for s in self._scenes]
-            durations = [s.duration for s in self._scenes]
+            narrations = [scene.narration for scene in self._scenes]
+            durations  = [scene.duration  for scene in self._scenes]
             generate_narration_track(
                 narrations, durations, narration_path,
                 progress_cb=self.progress_cb,
+                voice=s.voice,
+                rate=s.voice_rate,
+                pitch=s.voice_pitch,
             )
             return str(narration_path)
         except Exception as e:
@@ -204,7 +220,7 @@ class Pipeline:
             return None
 
     def step_generate_music(self, prompt: str) -> str | None:
-        """Stage 3.5: Generate background music matching the story mood."""
+        """Stage 4.5/5: Generate background music matching the story mood."""
         self.progress_cb("🎵 Stage 4.5/5: Generating background music...")
         self._check_cancel()
 
@@ -213,22 +229,22 @@ class Pipeline:
             self.progress_cb(f"  Using provided track: {self.config.bg_music}")
             return self.config.bg_music
 
-        # Pick mood from prompt keywords
-        lower = prompt.lower()
-        if any(k in lower for k in ["fly", "wing", "soar", "flight", "sky", "hero", "triumph", "epic"]):
-            mood = "epic"
-        elif any(k in lower for k in ["sad", "dark", "loss", "death", "mourn"]):
-            mood = "melancholic"
-        elif any(k in lower for k in ["nature", "ocean", "forest", "calm", "peace"]):
-            mood = "ambient"
-        else:
-            mood = "epic"
+        # Use per-story music style; if still at the generic default, also
+        # check prompt keywords so auto-generated stories get a sensible mood.
+        music_style = self._settings.music_style
+        if music_style == StorySettings().music_style:
+            lower = prompt.lower()
+            if any(k in lower for k in ["epic", "fly", "wing", "soar", "hero", "triumph"]):
+                music_style = "epic"
+            elif any(k in lower for k in ["sad", "dark", "loss", "death", "mourn"]):
+                music_style = "melancholic"
+            elif any(k in lower for k in ["calm", "peace", "nature", "ocean", "forest"]):
+                music_style = "peaceful"
 
         try:
             tmp = Path(self._tmpdir)
             music_path = tmp / "background_music.wav"
-            # Generate ~36 seconds (4.5 bars × 4 beats at 72 BPM ≈ loopable)
-            generate_music(music_path, duration=36.0, mood=mood,
+            generate_music(music_path, duration=36.0, mood=music_style,
                            progress_cb=self.progress_cb)
             return str(music_path)
         except Exception as e:
@@ -283,6 +299,14 @@ class Pipeline:
                     self.progress_cb(
                         f"  Scene {s.index}: [{s.media_type}] {s.duration}s — {s.narration[:60]}"
                     )
+            # Sync scene durations to fit narration (prevents cutting off speech)
+            s = self._settings
+            sync_scene_durations_to_narration(
+                self._scenes, self.progress_cb,
+                voice=s.voice, rate=s.voice_rate, pitch=s.voice_pitch,
+            )
+            self.progress_cb("")
+            
             media_paths = self.step_generate_images()
             media_paths = self.step_generate_videos(media_paths)
             narration = self.step_generate_narration()
