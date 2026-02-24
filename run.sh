@@ -13,14 +13,25 @@ echo "📦 Checking system dependencies..."
 
 NEED_APT=()
 
-PYTHON=python3.12
-if ! command -v $PYTHON &>/dev/null; then
-    echo "❌ Python 3.12 not found. Install with: sudo apt install python3.12"
+PYTHON=""
+for cmd in python3.12 python3.11 python3.10 python3; do
+    if command -v "$cmd" &>/dev/null; then
+        ver=$("$cmd" --version 2>&1 | grep -oP '3\.\d+')
+        minor=${ver#3.}
+        if [ "$minor" -ge 10 ] 2>/dev/null; then
+            PYTHON="$cmd"
+            break
+        fi
+    fi
+done
+
+if [ -z "$PYTHON" ]; then
+    echo "❌ Python 3.10+ not found. Install with: sudo apt install python3.10 (or newer)"
     exit 1
 fi
 
 if ! $PYTHON -c "import venv" 2>/dev/null; then
-    NEED_APT+=("python3.12-venv")
+    NEED_APT+=("${PYTHON}-venv")
 fi
 
 if ! command -v ffmpeg &>/dev/null; then

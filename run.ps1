@@ -8,24 +8,40 @@ Write-Host "VidGen Setup & Launch" -ForegroundColor Cyan
 Write-Host "=====================" -ForegroundColor Cyan
 
 # ---------------------------------------------------------------------------
-# 1. Check Python 3.12
+# 1. Check Python 3.10+
 # ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "Checking system dependencies..." -ForegroundColor Yellow
 
 $PYTHON = $null
-foreach ($cmd in @("python3.12", "python3", "python")) {
+
+# Try the Windows py launcher first (most reliable on Windows)
+foreach ($minor in @("3.13", "3.12", "3.11", "3.10")) {
     try {
-        $ver = & $cmd --version 2>&1
-        if ($ver -match "Python 3\.1[2-9]|Python 3\.[2-9]\d") {
-            $PYTHON = $cmd
+        $ver = & py "-$minor" --version 2>&1
+        if ($ver -match "Python 3\.1[0-9]|Python 3\.[2-9]\d") {
+            # Resolve actual python path via py launcher
+            $PYTHON = (& py "-$minor" -c "import sys; print(sys.executable)" 2>&1).Trim()
             break
         }
     } catch { }
 }
 
+# Fall back to direct commands
 if (-not $PYTHON) {
-    Write-Host "ERROR: Python 3.12+ not found." -ForegroundColor Red
+    foreach ($cmd in @("python3.12", "python3.11", "python3.10", "python3", "python")) {
+        try {
+            $ver = & $cmd --version 2>&1
+            if ($ver -match "Python 3\.1[0-9]|Python 3\.[2-9]\d") {
+                $PYTHON = $cmd
+                break
+            }
+        } catch { }
+    }
+}
+
+if (-not $PYTHON) {
+    Write-Host "ERROR: Python 3.10+ not found." -ForegroundColor Red
     Write-Host "  Download from https://www.python.org/downloads/" -ForegroundColor Red
     Write-Host "  Make sure to check 'Add Python to PATH' during install." -ForegroundColor Red
     exit 1
