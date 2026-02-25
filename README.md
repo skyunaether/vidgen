@@ -1,8 +1,32 @@
-# VidGen — Automated Video Generation Pipeline
+# vidgen (Multi-Agent Video Pipeline)
 
-Generate YouTube Shorts-style vertical videos (1080×1920) from text prompts.
+vidgen is an open-source video generation pipeline that automates the creation of vertical faceless videos (e.g., for YouTube Shorts, TikTok). 
 
-## Quick Start
+**New:** The Multi-Agent System! The pipeline is now orchestrated by an AI ProjectManager, evaluated by QualityControl, and iteratively improved by a DevTeam agent adjusting configs and checking them into Git branches.
+
+## AI Orchestration
+
+To run the full multi-agent pipeline:
+```powershell
+.\run_orchestrator.ps1 -prompt "A cinematic video about space exploration" -maxIterations 3
+```
+
+Ensure you have `HF_TOKEN` set in your environment:
+```powershell
+$env:HF_TOKEN="hf_..."
+```
+
+What happens:
+1. `ProjectManager` interprets your prompt and writes a structured `requirement.json`.
+2. `vidgen` generates the video and outputs a `manifest.json`.
+3. `QualityControl` evaluates the generated video against the requirements (using `ffprobe` and HF text models) and produces a `qc_report.json`.
+4. If it fails QC, the `DevTeam` proposes config overrides, checks out a new branch (`devteam/<run-id>/...`), commits the changes, and loops back to step 2.
+
+All artifacts are persisted in `runs/<run-id>/`.
+
+---
+
+## 🚀 Quick Start (Original Mode)
 
 ```bash
 # Install dependencies

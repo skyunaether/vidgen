@@ -100,3 +100,7 @@ __marimo__/
 # OS
 .DS_Store
 Thumbs.db
+
+# VidGen
+runs/
+*.local.json
