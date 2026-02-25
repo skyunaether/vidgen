@@ -275,7 +275,10 @@ def parse_markdown_story(text: str) -> tuple[str, list[Scene], StorySettings]:
         lower = line.lower()
 
         if lower.startswith("music:"):
-            settings.music_style = line[len("music:"):].strip()
+            raw_music = line[len("music:"):].strip()
+            # Extract the key style before any description (—, –)
+            music_key = re.split(r"\s*[—–]", raw_music, maxsplit=1)[0].strip()
+            settings.music_style = music_key if music_key else raw_music
 
         elif lower.startswith("voice-rate:"):
             _rate_override = line[len("voice-rate:"):].strip()
@@ -285,11 +288,15 @@ def parse_markdown_story(text: str) -> tuple[str, list[Scene], StorySettings]:
 
         elif lower.startswith("voice:"):
             val = line[len("voice:"):].strip()
-            preset = VOICE_PRESETS.get(val.lower())
+            # Extract the key name before any description separator (—, –, -, ,)
+            key = re.split(r"\s*[—–\-,]", val, maxsplit=1)[0].strip()
+            # Try preset lookup: first the key, then the full value
+            preset = VOICE_PRESETS.get(key.lower()) or VOICE_PRESETS.get(val.lower())
             if preset:
                 settings.voice, settings.voice_rate, settings.voice_pitch = preset
-            else:
-                settings.voice = val  # treat as raw Edge TTS voice ID
+            elif re.match(r"^[a-z]{2}-[A-Z]{2}-\w+Neural$", key):
+                settings.voice = key  # raw Edge TTS voice ID
+            # else: keep default voice (unrecognised description text)
 
     # Apply rate/pitch overrides (after Voice: so they always win)
     if _rate_override:

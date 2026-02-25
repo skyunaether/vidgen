@@ -13,6 +13,7 @@ from .compiler import compile_video
 from .config import Config
 from .imagegen import generate_image, generate_placeholder_image
 from .musicgen import generate_music
+from .musicgen_ai import generate_music_ai
 from .scriptgen import Scene, StorySettings, generate_script, parse_markdown_story, parse_user_story, script_to_json
 from .story_agent import review_and_refine
 from .ttsgen import generate_narration_track, sync_scene_durations_to_narration
@@ -241,9 +242,27 @@ class Pipeline:
             elif any(k in lower for k in ["calm", "peace", "nature", "ocean", "forest"]):
                 music_style = "peaceful"
 
+        tmp = Path(self._tmpdir)
+        music_path = tmp / "background_music.wav"
+
+        # Try AI music generation first (MusicGen)
+        if self.config.use_ai_music and not self.use_placeholders:
+            try:
+                self.progress_cb("  Using AI music generation (MusicGen)...")
+                generate_music_ai(
+                    music_path,
+                    prompt=music_style,
+                    model_id=self.config.music_model,
+                    duration=30.0,
+                    progress_cb=self.progress_cb,
+                )
+                return str(music_path)
+            except Exception as e:
+                self.progress_cb(f"  ⚠ AI music failed: {e} — falling back to procedural")
+                log.warning("AI music gen failed, falling back: %s", e)
+
+        # Fallback: procedural synthesis
         try:
-            tmp = Path(self._tmpdir)
-            music_path = tmp / "background_music.wav"
             generate_music(music_path, duration=36.0, mood=music_style,
                            progress_cb=self.progress_cb)
             return str(music_path)

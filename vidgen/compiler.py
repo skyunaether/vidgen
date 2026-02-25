@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
-from .config import CROSSFADE_DURATION, FPS, HEIGHT, WIDTH
+from .config import CROSSFADE_DURATION, FPS, HEIGHT, WIDTH, KB_OVERSCAN, TRANSITION_TYPES
 from .scriptgen import Scene
 
 log = logging.getLogger(__name__)
@@ -30,25 +30,38 @@ def _has_drawtext() -> bool:
 
 
 def _pil_burn_subtitle(image_path: Path, text: str, output_path: Path) -> Path:
-    """Burn subtitle text onto an image using PIL (fallback when drawtext is unavailable).
+    """Burn subtitle text onto an image.
 
-    Renders white text with a dark semi-transparent bar at the bottom third.
+    Large readable text filling 80% of frame width, with a dark gradient
+    backdrop and multi-layer shadow for cinematic readability.
     """
-    from PIL import Image, ImageDraw, ImageFont
+    import sys
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
     img = Image.open(image_path).convert("RGBA")
     w, h = img.size
 
     draw = ImageDraw.Draw(img)
 
-    # Try to load a decent font
-    font_size = max(28, h // 36)
+    # Font size: scale to image height so text is clearly readable
+    font_size = max(36, h // 18)
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont
-    for font_path in [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-    ]:
+    # Try platform-appropriate bold fonts
+    candidate_fonts = []
+    if sys.platform == "win32":
+        candidate_fonts = [
+            "C:/Windows/Fonts/arialbd.ttf",
+            "C:/Windows/Fonts/arial.ttf",
+            "C:/Windows/Fonts/segoeui.ttf",
+            "C:/Windows/Fonts/calibrib.ttf",
+        ]
+    else:
+        candidate_fonts = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        ]
+    for font_path in candidate_fonts:
         try:
             font = ImageFont.truetype(font_path, font_size)
             break
@@ -57,8 +70,8 @@ def _pil_burn_subtitle(image_path: Path, text: str, output_path: Path) -> Path:
     else:
         font = ImageFont.load_default()
 
-    # Word-wrap text to fit width (with margins)
-    margin = w // 12
+    # Word-wrap text to fit 80% of frame width
+    margin = int(w * 0.10)
     max_width = w - margin * 2
     words = text.split()
     lines: list[str] = []
@@ -74,34 +87,104 @@ def _pil_burn_subtitle(image_path: Path, text: str, output_path: Path) -> Path:
     if cur:
         lines.append(cur)
 
-    line_h = font_size + 8
-    total_text_h = len(lines) * line_h + 16
-    bar_y = h - int(h * 0.22) - total_text_h // 2
+    line_h = int(font_size * 1.35)
+    total_text_h = len(lines) * line_h
+    pad_v = int(font_size * 0.6)
+    bar_top = h - int(h * 0.22) - total_text_h // 2 - pad_v
+    bar_bottom = bar_top + total_text_h + pad_v * 2
 
-    # Dark translucent background bar
+    # Dark gradient backdrop (darker at centre, fades at edges)
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     bar_draw = ImageDraw.Draw(overlay)
-    bar_draw.rectangle(
-        [0, bar_y - 12, w, bar_y + total_text_h + 12],
-        fill=(0, 0, 0, 160),
+    bar_draw.rounded_rectangle(
+        [margin // 2, bar_top, w - margin // 2, bar_bottom],
+        radius=int(font_size * 0.4),
+        fill=(0, 0, 0, 180),
     )
+    # Soften edges of the backdrop
+    overlay = overlay.filter(ImageFilter.GaussianBlur(radius=4))
     img = Image.alpha_composite(img, overlay)
     draw = ImageDraw.Draw(img)
 
-    # Draw each line centred
-    y = bar_y
+    # Draw each line centred with multi-layer shadow for depth
+    text_y = bar_top + pad_v
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
-        x = (w - (bbox[2] - bbox[0])) // 2
-        # Shadow
-        draw.text((x + 2, y + 2), line, font=font, fill=(0, 0, 0, 220))
-        # Text
-        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
-        y += line_h
+        text_w = bbox[2] - bbox[0]
+        x = (w - text_w) // 2
+        # Outer shadow (soft)
+        draw.text((x + 4, text_y + 4), line, font=font, fill=(0, 0, 0, 140))
+        # Inner shadow (crisp)
+        draw.text((x + 2, text_y + 2), line, font=font, fill=(0, 0, 0, 220))
+        # Main text
+        draw.text((x, text_y), line, font=font, fill=(255, 255, 255, 255))
+        text_y += line_h
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     img.convert("RGB").save(output_path, "PNG")
     return output_path
+
+
+def _kb_pattern(scene_index: int, frames: int) -> str:
+    """Return a zoompan expression string for a Ken Burns motion pattern.
+
+    Cycles through 8 distinct patterns based on scene_index so adjacent
+    scenes always have different camera movements.
+    """
+    # Helper: on/d produces 0→1 linear ramp over the scene duration
+    # All expressions use ffmpeg zoompan variables: on (frame number), iw, ih, zoom
+    patterns = [
+        # 0 — Zoom in + drift right
+        (
+            "z='1.0+on/{d}*0.15'"
+            ":x='(iw-iw/zoom)*on/{d}'"
+            ":y='(ih-ih/zoom)/2'"
+        ),
+        # 1 — Zoom in + drift left
+        (
+            "z='1.0+on/{d}*0.15'"
+            ":x='(iw-iw/zoom)*(1-on/{d})'"
+            ":y='(ih-ih/zoom)/2'"
+        ),
+        # 2 — Zoom out (reveal): start zoomed-in, pull back
+        (
+            "z='1.20-on/{d}*0.18'"
+            ":x='(iw-iw/zoom)/2'"
+            ":y='(ih-ih/zoom)/2'"
+        ),
+        # 3 — Pan up (tilt up): static zoom, bottom-to-top
+        (
+            "z='1.12'"
+            ":x='(iw-iw/zoom)/2'"
+            ":y='(ih-ih/zoom)*(1-on/{d})'"
+        ),
+        # 4 — Pan down (tilt down): static zoom, top-to-bottom
+        (
+            "z='1.12'"
+            ":x='(iw-iw/zoom)/2'"
+            ":y='(ih-ih/zoom)*on/{d}'"
+        ),
+        # 5 — Diagonal drift (top-left to bottom-right) + gentle zoom
+        (
+            "z='1.0+on/{d}*0.10'"
+            ":x='(iw-iw/zoom)*on/{d}'"
+            ":y='(ih-ih/zoom)*on/{d}'"
+        ),
+        # 6 — Slow push in (centre focus, dramatic)
+        (
+            "z='1.0+on/{d}*0.12'"
+            ":x='(iw-iw/zoom)/2'"
+            ":y='(ih-ih/zoom)/2'"
+        ),
+        # 7 — Pull back + slight leftward drift
+        (
+            "z='1.15-on/{d}*0.13'"
+            ":x='(iw-iw/zoom)*(0.6-on/{d}*0.2)'"
+            ":y='(ih-ih/zoom)/2'"
+        ),
+    ]
+    pat = patterns[scene_index % len(patterns)]
+    return pat.format(d=frames)
 
 
 def _scene_to_clip(
@@ -150,13 +233,14 @@ def _scene_to_clip(
         input_args = ["-i", str(input_media)]
         time_args = ["-t", str(dur)]
     else:
-        # Image – Ken Burns (gentle zoom + pan on the subtitle-burned image)
+        # Image – Varied Ken Burns (zoom + pan, pattern rotated per scene)
         frames = int(dur * FPS)
+        overscan_w = int(WIDTH * KB_OVERSCAN)
+        overscan_h = int(HEIGHT * KB_OVERSCAN)
+        zp_expr = _kb_pattern(scene.index, frames)
         vf = (
-            f"scale=1200x2134,"
-            f"zoompan=z='min(zoom+0.0015,1.08)'"
-            f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-            f":d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS}"
+            f"scale={overscan_w}x{overscan_h},"
+            f"zoompan={zp_expr}:d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS}"
         )
         input_args = ["-loop", "1", "-i", str(input_media)]
         time_args = ["-t", str(dur)]
@@ -397,22 +481,24 @@ def _concat_with_xfade(
         if i + 1 < len(clip_durations):
             running_output_dur = offset + clip_durations[i + 1]
 
-    # Build filter chain
+    # Build filter chain with varied transition types
     if n == 2:
-        filter_str = f"[0:v][1:v]xfade=transition=fade:duration={fade_dur}:offset={offsets[0]},format=yuv420p[v]"
+        tr = TRANSITION_TYPES[0 % len(TRANSITION_TYPES)]
+        filter_str = f"[0:v][1:v]xfade=transition={tr}:duration={fade_dur}:offset={offsets[0]},format=yuv420p[v]"
     else:
         parts = []
         prev = "[0:v]"
         for i in range(n - 1):
+            tr = TRANSITION_TYPES[i % len(TRANSITION_TYPES)]
             next_in = f"[{i+1}:v]"
             if i == n - 2:
                 parts.append(
-                    f"{prev}{next_in}xfade=transition=fade:duration={fade_dur}:offset={offsets[i]},format=yuv420p[v]"
+                    f"{prev}{next_in}xfade=transition={tr}:duration={fade_dur}:offset={offsets[i]},format=yuv420p[v]"
                 )
             else:
                 out_label = f"[xf{i}]"
                 parts.append(
-                    f"{prev}{next_in}xfade=transition=fade:duration={fade_dur}:offset={offsets[i]}{out_label}"
+                    f"{prev}{next_in}xfade=transition={tr}:duration={fade_dur}:offset={offsets[i]}{out_label}"
                 )
                 prev = out_label
         filter_str = ";".join(parts)

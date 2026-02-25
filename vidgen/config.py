@@ -13,7 +13,6 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 WIDTH = 1080
 HEIGHT = 1920
 FPS = 30
-CROSSFADE_DURATION = 0.5  # seconds
 
 # Image generation
 # FLUX.1-schnell: free tier, fast, no gating (FLUX.1-dev requires HF Pro)
@@ -28,9 +27,27 @@ API_IMAGE_HEIGHT = 1024
 # Video generation (image-to-video)
 VIDEO_MODEL = "stabilityai/stable-video-diffusion-img2vid-xt"
 
+# AI music generation (MusicGen)
+DEFAULT_MUSIC_MODEL = "facebook/musicgen-small"
+
+# AI TTS (Parler-TTS)
+DEFAULT_TTS_MODEL = "parler-tts/parler-tts-mini-v1"
+
 # Ken Burns
 KB_ZOOM_MIN = 1.0
-KB_ZOOM_MAX = 1.08  # 8% zoom
+KB_ZOOM_MAX = 1.15  # 15% zoom – more cinematic motion
+KB_OVERSCAN = 1.35  # 35% overscan so pans don't reveal black edges
+
+# Transitions – cycled per scene for visual variety
+CROSSFADE_DURATION = 0.8  # seconds
+TRANSITION_TYPES = [
+    "fade",        # classic dissolve
+    "slideleft",   # slide incoming from right
+    "smoothleft",  # smooth directional wipe
+    "circlecrop",  # circular iris reveal
+    "slideup",     # slide incoming from bottom
+    "diagtl",      # diagonal wipe top-left
+]
 
 # Text overlay
 TEXT_FONT_SIZE = 42
@@ -51,6 +68,10 @@ class Config:
     hf_token: str = ""
     output_dir: Path = field(default_factory=lambda: Path("output"))
     bg_music: str | None = None  # path to background music file
+    use_ai_music: bool = True    # use MusicGen (falls back to procedural)
+    use_ai_tts: bool = False     # use Parler-TTS (default: Edge TTS)
+    music_model: str = DEFAULT_MUSIC_MODEL
+    tts_model: str = DEFAULT_TTS_MODEL
 
     @classmethod
     def load(cls) -> "Config":
@@ -69,6 +90,14 @@ class Config:
                     cfg.bg_music = music
                 if out := data.get("output_dir"):
                     cfg.output_dir = Path(out)
+                if data.get("use_ai_music") is not None:
+                    cfg.use_ai_music = bool(data["use_ai_music"])
+                if data.get("use_ai_tts") is not None:
+                    cfg.use_ai_tts = bool(data["use_ai_tts"])
+                if mm := data.get("music_model"):
+                    cfg.music_model = mm
+                if tm := data.get("tts_model"):
+                    cfg.tts_model = tm
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -80,4 +109,8 @@ class Config:
         data = {"hf_token": self.hf_token}
         if self.bg_music:
             data["bg_music"] = self.bg_music
+        data["use_ai_music"] = self.use_ai_music
+        data["use_ai_tts"] = self.use_ai_tts
+        data["music_model"] = self.music_model
+        data["tts_model"] = self.tts_model
         CONFIG_FILE.write_text(json.dumps(data, indent=2))
