@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import logging
 import sys
+import asyncio
 from pathlib import Path
+
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 def _setup_logging() -> None:

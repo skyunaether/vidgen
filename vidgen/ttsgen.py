@@ -11,6 +11,7 @@ import logging
 import shutil
 import subprocess
 import tempfile
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -24,6 +25,10 @@ log = logging.getLogger(__name__)
 EDGE_TTS_VOICE = "en-US-GuyNeural"
 EDGE_TTS_RATE  = "-8%"    # slightly slower for gravitas
 EDGE_TTS_PITCH = "-5Hz"   # slightly lower pitch for depth
+
+# Fix for Windows asyncio ProactorEventLoop breaking edge-tts websockets
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 async def _edge_tts_to_mp3_async(
@@ -245,5 +250,10 @@ def generate_narration_track(
         size_kb = output_path.stat().st_size // 1024
         total_dur = sum(scene_durations)
         progress_cb(f"  ✓ Narration track ({voice}): {total_dur:.0f}s · {size_kb} KB")
-
+        # Keep a copy of the final narration track for debugging
+        try:
+            shutil.copy2(output_path, Path("output/debug_narration.wav"))
+        except:
+            pass
+            
     return output_path

@@ -600,13 +600,17 @@ def _mix_audio_tracks(
             "-filter_complex", (
                 f"[1:a]volume=1.0,atrim=0:{vid_dur:.3f},asetpts=PTS-STARTPTS[narrator];"
                 f"[2:a]aloop=loop=-1:size=2e+09,volume=0.15,atrim=0:{vid_dur:.3f}[music];"
-                "[narrator][music]amix=inputs=2:duration=first:dropout_transition=2[a]"
+                "[narrator][music]amix=inputs=2:duration=longest[a]"
             ),
             "-map", "0:v", "-map", "[a]",
             "-t", f"{vid_dur:.3f}",
             str(output),
         ]
+    
+    log.debug("Audio mix CMD: %s", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, timeout=300)
+    log.debug("Audio mix ffmpeg output: %s", result.stderr.decode(errors="replace"))
+    
     if result.returncode != 0:
         log.warning("Audio mix failed: %s", result.stderr.decode(errors="replace")[-400:])
         # Fallback: narrator only, no music

@@ -1,4 +1,3 @@
-import pyudev # just checking env
 import subprocess
 import json
 from dataclasses import dataclass

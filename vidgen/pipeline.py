@@ -180,13 +180,18 @@ class Pipeline:
             self.progress_cb(f"  Animating scene {scene.index}...")
 
             try:
-                if self.use_placeholders or not self.config.hf_token:
+                if self.use_placeholders or (not self.config.hf_token and not self.config.gemini_api_key):
                     generate_placeholder_video(img_path, vid_path, duration=scene.duration)
                     self.progress_cb(f"  ✓ Scene {scene.index} animated (placeholder)")
                 else:
-                    generate_video(img_path, vid_path, self.config, self.progress_cb)
-                    self.progress_cb(f"  ✓ Scene {scene.index} animated")
-                media_paths[scene.index] = vid_path
+                    if self.config.gemini_api_key:
+                        from .utils.gemini_client import generate_video_gemini
+                        generate_video_gemini(scene.visual, vid_path, self.config, self.progress_cb)
+                        self.progress_cb(f"  ✓ Scene {scene.index} animated (Veo)")
+                    else:
+                        generate_video(img_path, vid_path, self.config, self.progress_cb)
+                        self.progress_cb(f"  ✓ Scene {scene.index} animated (HF)")
+                    media_paths[scene.index] = vid_path
             except Exception as e:
                 self.progress_cb(f"  ⚠ Animation failed for scene {scene.index}: {e}")
                 log.warning("Video gen failed for scene %d, keeping image: %s", scene.index, e)

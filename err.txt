@@ -1,0 +1,13 @@
+Orchestrator: Started run 20260226_164452
+
+--- Iteration 1 ---
+Orchestrator: Running VidGen...
+Traceback (most recent call last):
+  File "D:\10_Workspace\10_Gentomatic\vidgen\orchestrator.py", line 156, in <module>
+    main()
+  File "D:\10_Workspace\10_Gentomatic\vidgen\orchestrator.py", line 123, in main
+    run_vidgen_real(str(plan_path), str(manifest_path), run_dir, run_id, args.prompt, args.story)
+  File "D:\10_Workspace\10_Gentomatic\vidgen\orchestrator.py", line 28, in run_vidgen_real
+    with open(story_path, "r", encoding="utf-8") as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'D:\\10_Workspace\\10_Gentomatic\\vidgen\\assets\\stories\\Zodiac Race - Detailed.md'

@@ -14,10 +14,13 @@ Maximum number of iteratons (default: 3)
 #>
 
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$prompt,
+    [Parameter(Mandatory = $false)]
+    [string]$prompt = "story",
     
-    [Parameter(Mandatory=$false)]
+    [Parameter(Mandatory = $false)]
+    [string]$story,
+
+    [Parameter(Mandatory = $false)]
     [int]$maxIterations = 3
 )
 
@@ -35,7 +38,12 @@ if (Get-Command "py" -ErrorAction SilentlyContinue) {
     $pyCmd = "py" # Fallback if standard python isn't in path, but usually python is fine in venvs
 }
 
-& python -m orchestrator --prompt $prompt --max-iterations $maxIterations
+$cmdArgs = @("--prompt", $prompt, "--max-iterations", $maxIterations)
+if ($story) {
+    $cmdArgs += "--story", $story
+}
+
+& $pyCmd -m orchestrator @cmdArgs
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Orchestrator failed with exit code $LASTEXITCODE."

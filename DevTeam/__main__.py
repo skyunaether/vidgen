@@ -25,13 +25,13 @@ No markdown wrappers.
 def propose_changes(report: QCReport, plan_path: str) -> dict:
     client = get_hf_client()
     
-    with open(plan_path, "r") as f:
+    with open(plan_path, "r", encoding="utf-8") as f:
         plan_txt = f.read()
         
     user_prompt = f"QC Report:\n{report.model_dump_json(indent=2)}\n\nCurrent Plan:\n{plan_txt}"
-    
+    # Use a specialized coding model for logic, variable manipulation, and valid JSON config diffs
     res = client.chat_completion(
-        model="meta-llama/Meta-Llama-3-8B-Instruct",
+        model="Qwen/Qwen2.5-Coder-32B-Instruct",
         system_prompt=SYSTEM_PROMPT,
         user_prompt=user_prompt
     )
@@ -42,7 +42,7 @@ def propose_changes(report: QCReport, plan_path: str) -> dict:
     return json.loads(content)
 
 def apply_diffs(plan_path: str, diffs: list) -> list[ConfigDiff]:
-    with open(plan_path, "r") as f:
+    with open(plan_path, "r", encoding="utf-8") as f:
         plan = json.load(f)
         
     applied = []
@@ -53,7 +53,7 @@ def apply_diffs(plan_path: str, diffs: list) -> list[ConfigDiff]:
         plan[key] = d["new_value"]
         applied.append(ConfigDiff(key=key, old_value=old_v, new_value=str(d["new_value"]), reason=d["reason"]))
         
-    with open(plan_path, "w") as f:
+    with open(plan_path, "w", encoding="utf-8") as f:
         json.dump(plan, f, indent=2)
         
     return applied
@@ -67,9 +67,9 @@ def main():
     args = parser.parse_args()
     
     print("DevTeam: Analyzing QC Report...")
-    with open(args.qc, "r") as f:
+    with open(args.qc, "r", encoding="utf-8") as f:
         report = QCReport(**json.load(f))
-    with open(args.manifest, "r") as f:
+    with open(args.manifest, "r", encoding="utf-8") as f:
         manifest = ArtifactManifest(**json.load(f))
         
     if report.all_passed:

@@ -13,39 +13,65 @@ def run_agent(module: str, args: list[str]):
         raise RuntimeError(f"Agent {module} failed.")
     return res.stdout
 
-def mock_vidgen(plan_path: str, manifest_path: str, run_dir: Path, run_id: str):
-    """
-    Simulates the vidgen component. In a real integration, this would call vidgen.main
-    with the GenerationPlan, and output an ArtifactManifest.
-    For now, we'll just create a dummy video and manifest.
-    """
-    vid_path = run_dir / "final_video.mp4"
-    # Create a dummy video using ffmpeg that passes the criteria (1080x1920, 60s, 30fps) for testing
-    # Or just touch it if ffmpeg is missing. We will try ffmpeg.
-    ffmpeg_cmd = [
-        "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=1080x1920:d=60",
-        "-r", "30", "-c:v", "libx264", str(vid_path)
-    ]
-    try:
-        subprocess.run(ffmpeg_cmd, capture_output=True, check=True)
-    except:
-        vid_path.touch() # fallback
+def run_vidgen_real(plan_path: str, manifest_path: str, run_dir: Path, run_id: str, prompt: str, story_path: str = None):
+    from vidgen.config import Config
+    from vidgen.pipeline import Pipeline
+    from vidgen.scriptgen import parse_markdown_story
+    
+    config = Config.load()
+    use_placeholders = not bool(config.hf_token)
+    pipeline = Pipeline(config=config, use_placeholders=use_placeholders)
+    
+    if story_path:
+        # Provide fallback to cp1252 if utf-8 fails for whatever reason, but prefer utf-8
+        try:
+            with open(story_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except UnicodeDecodeError:
+            with open(story_path, "r", encoding="cp1252") as f:
+                content = f.read()
+                
+        _, scenes, settings = parse_markdown_story(content)
+        pipeline.inject_scenes(scenes, settings)
+        if not prompt or prompt == "file":
+            prompt = Path(story_path).stem
+            
+    def progress(msg: str):
+        print(f"VidGen: {msg}")
         
-    manifest = {
-        "run_id": run_id,
-        "run_folder": str(run_dir),
-        "final_video_path": str(vid_path.absolute()),
-        "image_paths": [],
-        "video_clip_paths": [],
-        "audio_paths": [],
-        "logs_path": str(run_dir / "vidgen.log")
-    }
-    with open(manifest_path, "w") as f:
-        json.dump(manifest, f, indent=2)
+    pipeline.progress_cb = progress
+    
+    try:
+        out_file = pipeline.run(prompt)
+        manifest = {
+            "run_id": run_id,
+            "run_folder": str(run_dir),
+            "final_video_path": str(out_file),
+            "image_paths": [],
+            "video_clip_paths": [],
+            "audio_paths": [],
+            "logs_path": str(run_dir / "vidgen.log")
+        }
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2)
+    except Exception as e:
+        print(f"VidGen failed: {e}")
+        manifest = {
+            "run_id": run_id,
+            "run_folder": str(run_dir),
+            "final_video_path": None,
+            "logs_path": str(run_dir / "vidgen.log"),
+            "image_paths": [],
+            "video_clip_paths": [],
+            "audio_paths": []
+        }
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
 
 def main():
     parser = argparse.ArgumentParser(description="Multi-Agent VidGen Orchestrator")
-    parser.add_argument("--prompt", type=str, required=True, help="User request prompt")
+    parser.add_argument("--prompt", type=str, required=False, default="story", help="User request prompt")
+    parser.add_argument("--story", type=str, required=False, help="Path to markdown story file")
     parser.add_argument("--max-iterations", type=int, default=3, help="Max improvement loops")
     # allow some overrides
     parser.add_argument("--target-duration", type=int, default=None)
@@ -94,7 +120,7 @@ def main():
         
         # 2. VidGen -> Artifacts
         print("Orchestrator: Running VidGen...")
-        mock_vidgen(str(plan_path), str(manifest_path), run_dir, run_id)
+        run_vidgen_real(str(plan_path), str(manifest_path), run_dir, run_id, args.prompt, args.story)
         
         # 3. QualityControl -> QCReport
         run_agent("QualityControl", [
@@ -103,7 +129,7 @@ def main():
             "--output", str(qc_path)
         ])
         
-        with open(qc_path, "r") as f:
+        with open(qc_path, "r", encoding="utf-8") as f:
             qc = json.load(f)
             
         if qc.get("all_passed"):

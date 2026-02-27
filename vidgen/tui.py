@@ -293,9 +293,9 @@ class VidGenApp(App):
         self.query_one("#manual-section").display = False
         self.query_one("#files-section").display  = False
 
-    @on(Select.Changed, "#mode-select")
-    def on_mode_changed(self, event: Select.Changed) -> None:
-        # Guard: ignore the initial mount-time fire if sections not ready
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id != "mode-select":
+            return
         value = event.value
         if value is Select.BLANK:
             return
@@ -348,21 +348,15 @@ class VidGenApp(App):
     # Button / key handlers
     # ------------------------------------------------------------------
 
-    @on(Button.Pressed, "#btn-generate")
-    def on_generate_btn(self) -> None:
-        self.action_generate()
-
-    @on(Button.Pressed, "#btn-test")
-    def on_test_btn(self) -> None:
-        self.action_test()
-
-    @on(Button.Pressed, "#btn-cancel")
-    def on_cancel_btn(self) -> None:
-        self.action_cancel()
-
-    @on(Button.Pressed, "#btn-clear")
-    def on_clear_btn(self) -> None:
-        self.action_clear_log()
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-generate":
+            self.action_generate()
+        elif event.button.id == "btn-test":
+            self.action_test()
+        elif event.button.id == "btn-cancel":
+            self.action_cancel()
+        elif event.button.id == "btn-clear":
+            self.action_clear_log()
 
     def action_generate(self) -> None:
         if self._running:
@@ -383,15 +377,10 @@ class VidGenApp(App):
     def action_clear_log(self) -> None:
         self.query_one("#log-area", RichLog).clear()
 
-    @on(Input.Submitted, "#prompt-input")
-    def on_prompt_submit(self) -> None:
-        if not self._running:
-            self.action_generate()
-
-    @on(Input.Submitted, "#files-path-input")
-    def on_files_path_submit(self) -> None:
-        if not self._running:
-            self.action_generate()
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id in ("prompt-input", "files-path-input"):
+            if not self._running:
+                self.action_generate()
 
     # ------------------------------------------------------------------
     # Core launch logic

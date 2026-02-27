@@ -66,6 +66,7 @@ RETRY_DELAY = 5  # seconds
 @dataclass
 class Config:
     hf_token: str = ""
+    gemini_api_key: str = ""
     output_dir: Path = field(default_factory=lambda: Path("output"))
     bg_music: str | None = None  # path to background music file
     use_ai_music: bool = True    # use MusicGen (falls back to procedural)
@@ -80,12 +81,16 @@ class Config:
 
         # Env var takes priority
         token = os.environ.get("HF_TOKEN", "")
+        gemini_key = os.environ.get("GEMINI_API_KEY", "")
 
         # Fall back to config file
-        if not token and CONFIG_FILE.exists():
+        if (not token or not gemini_key) and CONFIG_FILE.exists():
             try:
-                data = json.loads(CONFIG_FILE.read_text())
-                token = data.get("hf_token", "")
+                data = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
+                if not token:
+                    token = data.get("hf_token", "")
+                if not gemini_key:
+                    gemini_key = data.get("gemini_api_key", "")
                 if music := data.get("bg_music"):
                     cfg.bg_music = music
                 if out := data.get("output_dir"):
@@ -102,11 +107,12 @@ class Config:
                 pass
 
         cfg.hf_token = token
+        cfg.gemini_api_key = gemini_key
         return cfg
 
     def save(self) -> None:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        data = {"hf_token": self.hf_token}
+        data = {"hf_token": self.hf_token, "gemini_api_key": self.gemini_api_key}
         if self.bg_music:
             data["bg_music"] = self.bg_music
         data["use_ai_music"] = self.use_ai_music

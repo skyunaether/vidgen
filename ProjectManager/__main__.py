@@ -28,9 +28,9 @@ The schema requires:
 
 def generate_spec(prompt: str) -> RequirementSpec:
     client = get_hf_client()
-    # We use a code model or an instruction tuned model for JSON structured output
+    # We use a highly capable instruction-tuned model for deep natural language understanding
     resp = client.chat_completion(
-        model="meta-llama/Meta-Llama-3-8B-Instruct", # Example model, or mixtral
+        model="meta-llama/Llama-3.1-8B-Instruct",
         system_prompt=SYSTEM_PROMPT,
         user_prompt=f"Create a video specification based on this user request:\n\n{prompt}"
     )

@@ -1,6 +1,9 @@
 import argparse
 import sys
 import json
+import subprocess
+import tempfile
+import os
 from pathlib import Path
 
 from schemas import RequirementSpec, ArtifactManifest, QCReport, QCCheck
@@ -57,13 +60,87 @@ def check_video_metrics(spec: RequirementSpec, manifest: ArtifactManifest) -> li
     
     return checks
 
-def evaluate_qualitative(spec: RequirementSpec, manifest: ArtifactManifest) -> QCCheck:
-    # Here we would use HF Vision if possible. For now, we simulate a prompt check
-    client = get_hf_client()
-    sys_prompt = "You are a Quality Control Agent. Critically assess if the video generation plan details align with the style."
-    user_prompt = f"Requirements: {spec.style_mood}\nAssess if the video aligns. Output PASSED or FAILED and a short explanation."
+def extract_media_for_qc(video_path: str) -> tuple[list[str], str]:
+    temp_dir = tempfile.mkdtemp()
+    audio_path = os.path.join(temp_dir, "audio.wav")
     
-    res = client.chat_completion(model="meta-llama/Meta-Llama-3-8B-Instruct", system_prompt=sys_prompt, user_prompt=user_prompt)
+    subprocess.run(["ffmpeg", "-y", "-i", video_path, "-q:a", "0", "-map", "a", audio_path], 
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                   
+    if not os.path.exists(audio_path):
+        audio_path = None
+        
+    frames = []
+    try:
+        info = get_video_info(video_path)
+        dur = info.duration_sec
+        timestamps = [dur * 0.25, dur * 0.5, dur * 0.75]
+        for i, t in enumerate(timestamps):
+            frame_path = os.path.join(temp_dir, f"frame_{i}.jpg")
+            subprocess.run(["ffmpeg", "-y", "-ss", str(t), "-i", video_path, "-frames:v", "1", "-q:v", "2", frame_path], 
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if os.path.exists(frame_path):
+                frames.append(frame_path)
+    except Exception as e:
+        print(f"Error extracting frames: {e}")
+            
+    return frames, audio_path
+
+def evaluate_qualitative(spec: RequirementSpec, manifest: ArtifactManifest) -> QCCheck:
+    client = get_hf_client()
+    sys_prompt = "You are a multimodal Quality Control Agent. Critically assess if the video content (frames) and audio (transcription) align with the specified style and mood."
+    
+    frames, audio_path = [], None
+    transcription = "No audio detected."
+    
+    if manifest.final_video_path and Path(manifest.final_video_path).exists():
+        try:
+            frames, audio_path = extract_media_for_qc(manifest.final_video_path)
+            if audio_path:
+                try:
+                    transcription = client.transcribe_audio(audio_path)
+                except Exception as ex:
+                    transcription = f"[Audio Transcription Failed: {ex}]"
+        except Exception as e:
+            print(f"Warning: Failed to extract media for multimodal QC: {e}")
+            
+    user_prompt = f"Requirements:\nStyle/Mood: {spec.style_mood}\nAudio/Music: {spec.audio_requirements}\n\nThe video has been transcribed as follows:\n[Audio Transcription]: {transcription}\n\nBased on the visual frames provided and the transcription above, does the video align with the overall project requirements? Output PASSED or FAILED and a short explanation."
+    
+    try:
+        if frames:
+            # Use Vision model for multimodal check
+            try:
+                res = client.vision_completion(
+                    model="meta-llama/Llama-3.2-11B-Vision-Instruct", 
+                    system_prompt=sys_prompt, 
+                    user_prompt=user_prompt,
+                    image_paths=frames
+                )
+            except Exception as ve:
+                print(f"Vision model failed ({ve}). Falling back to text reasoning model.")
+                res = client.chat_completion(
+                    model="meta-llama/Llama-3.3-70B-Instruct", 
+                    system_prompt=sys_prompt, 
+                    user_prompt=user_prompt
+                )
+        else:
+            # Fallback to text reasoning model if no frames extracted
+            res = client.chat_completion(
+                model="meta-llama/Llama-3.3-70B-Instruct", 
+                system_prompt=sys_prompt, 
+                user_prompt=user_prompt
+            )
+    except Exception as e:
+        res = f"FAILED. API Error during evaluation: {e}"
+
+    # Cleanup temp files
+    for f in frames:
+        try: os.remove(f)
+        except: pass
+    if audio_path:
+        try: os.remove(audio_path)
+        except: pass
+
     res_upper = res.upper()
     passed = "FAILED" not in res_upper
     return QCCheck(

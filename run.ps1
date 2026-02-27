@@ -1,6 +1,20 @@
 # VidGen Setup & Launch for Windows
 # Run with: powershell -ExecutionPolicy Bypass -File run.ps1
 
+param(
+    [Parameter(Mandatory = $false)]
+    [string]$Prompt = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$Story = "",
+
+    [Parameter(Mandatory = $false)]
+    [int]$MaxIterations = 3,
+
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$RemainingArgs
+)
+
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
@@ -24,7 +38,8 @@ foreach ($minor in @("3.13", "3.12", "3.11", "3.10")) {
             $PYTHON = (& py "-$minor" -c "import sys; print(sys.executable)" 2>&1).Trim()
             break
         }
-    } catch { }
+    }
+    catch { }
 }
 
 # Fall back to direct commands
@@ -36,7 +51,8 @@ if (-not $PYTHON) {
                 $PYTHON = $cmd
                 break
             }
-        } catch { }
+        }
+        catch { }
     }
 }
 
@@ -62,8 +78,9 @@ if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
     Write-Host "    scoop install ffmpeg         (if you have Scoop)" -ForegroundColor White
     Write-Host "  Or download from https://ffmpeg.org/download.html" -ForegroundColor White
     Write-Host "  (You can still run in test/placeholder mode without ffmpeg)" -ForegroundColor Yellow
-} else {
-    $ffver = (ffmpeg -version 2>&1 | Select-Object -First 1) -replace "ffmpeg version ",""
+}
+else {
+    $ffver = (ffmpeg -version 2>&1 | Select-Object -First 1) -replace "ffmpeg version ", ""
     Write-Host "OK  ffmpeg found ($ffver)" -ForegroundColor Green
 }
 
@@ -78,11 +95,12 @@ if (-not (Test-Path ".venv")) {
         Write-Host "ERROR: Failed to create virtual environment." -ForegroundColor Red
         exit 1
     }
-} else {
+}
+else {
     Write-Host "OK  Virtual environment exists" -ForegroundColor Green
 }
 
-$pip    = ".\.venv\Scripts\pip.exe"
+$pip = ".\.venv\Scripts\pip.exe"
 $python = ".\.venv\Scripts\python.exe"
 
 # ---------------------------------------------------------------------------
@@ -114,9 +132,11 @@ Write-Host ""
 $configPath = "$env:USERPROFILE\.vidgen\config.json"
 if ($env:HF_TOKEN) {
     Write-Host "HF_TOKEN found in environment" -ForegroundColor Green
-} elseif (Test-Path $configPath) {
+}
+elseif (Test-Path $configPath) {
     Write-Host "Config found at $configPath" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host "WARNING: No HF_TOKEN set. You can:" -ForegroundColor Yellow
     Write-Host "  `$env:HF_TOKEN = 'your_key_here'   (current session)" -ForegroundColor White
     Write-Host "  [System.Environment]::SetEnvironmentVariable('HF_TOKEN','your_key','User')" -ForegroundColor White
@@ -128,6 +148,22 @@ if ($env:HF_TOKEN) {
 # 7. Launch
 # ---------------------------------------------------------------------------
 Write-Host ""
-Write-Host "Launching VidGen TUI..." -ForegroundColor Cyan
-Write-Host ""
-& $python -m vidgen.main @args
+
+if ($Prompt -ne "" -or $Story -ne "") {
+    Write-Host "Launching Multi-Agent Orchestrator..." -ForegroundColor Cyan
+    $cmdArgs = @("--max-iterations", $MaxIterations)
+    if ($Prompt -ne "") { $cmdArgs += "--prompt"; $cmdArgs += $Prompt }
+    if ($Story -ne "") { $cmdArgs += "--story"; $cmdArgs += $Story }
+    
+    & $python -m orchestrator @cmdArgs
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Orchestrator failed with exit code $LASTEXITCODE."
+        exit $LASTEXITCODE
+    }
+    Write-Host "Orchestrator finished successfully." -ForegroundColor Green
+}
+else {
+    Write-Host "Launching VidGen TUI..." -ForegroundColor Cyan
+    & $python -m vidgen.main @RemainingArgs
+}
