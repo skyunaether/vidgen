@@ -27,13 +27,12 @@ def _download_video(url: str, output_path: Path, api_key: str) -> Path:
     return output_path
 
 
-def generate_video_gemini(
+def submit_video_generation_gemini(
     prompt: str,
-    output_path: Path,
     config: Config,
     progress_cb: Callable[[str], None] | None = None,
-) -> Path:
-    """Generate a video using Google Veo via the Gemini API."""
+) -> str:
+    """Submit a video generation job and return the operation name (ID)."""
     if not config.gemini_api_key:
         raise ValueError("GEMINI_API_KEY is not set.")
 
@@ -51,13 +50,31 @@ def generate_video_gemini(
     )
 
     if progress_cb:
-        progress_cb("  Video gen: Job submitted, waiting for completion (can take a few minutes)...")
+        progress_cb(f"  Video gen: Job submitted ({operation.name}).")
 
-    # Poll until done — operation.done is None initially, True when finished
-    while not operation.done:
-        time.sleep(10)
-        operation = client.operations.get(operation)
+    return operation.name
 
+
+def check_video_generation_gemini(
+    operation_name: str,
+    output_path: Path,
+    config: Config,
+    progress_cb: Callable[[str], None] | None = None,
+) -> Path | None:
+    """
+    Check the status of a video generation job. 
+    Returns the Path to the downloaded video if done, raises error if failed, 
+    or returns None if still running.
+    """
+    if not config.gemini_api_key:
+        raise ValueError("GEMINI_API_KEY is not set.")
+
+    client = genai.Client(api_key=config.gemini_api_key)
+    operation = client.operations.get(operation_name)
+    
+    if not operation.done:
+        return None
+        
     if operation.error:
         msg = f"Veo generation failed: {operation.error}"
         log.error(msg)
@@ -82,3 +99,22 @@ def generate_video_gemini(
         progress_cb(f"  Video gen: Download ready! Saving to {output_path.name}...")
 
     return _download_video(video_uri, output_path, config.gemini_api_key)
+
+
+def generate_video_gemini(
+    prompt: str,
+    output_path: Path,
+    config: Config,
+    progress_cb: Callable[[str], None] | None = None,
+) -> Path:
+    """Generate a video using Google Veo via the Gemini API (synchronous wrapper)."""
+    operation_name = submit_video_generation_gemini(prompt, config, progress_cb)
+    
+    if progress_cb:
+        progress_cb("  Video gen: Job submitted, waiting for completion (can take a few minutes)...")
+        
+    while True:
+        res = check_video_generation_gemini(operation_name, output_path, config, progress_cb)
+        if res is not None:
+            return res
+        time.sleep(10)

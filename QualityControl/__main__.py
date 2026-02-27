@@ -179,7 +179,10 @@ def main():
     )
     
     with open(args.output, "w", encoding="utf-8") as f:
-        f.write(report.model_dump_json(indent=2))
+        try:
+            f.write(report.model_dump_json(indent=2))
+        except AttributeError:
+            f.write(report.json(indent=2))
         
     print(f"QualityControl: Finished. All Passed: {all_passed}. Saved to {args.output}")
 

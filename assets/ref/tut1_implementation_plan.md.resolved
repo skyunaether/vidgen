@@ -1,0 +1,39 @@
+# Goal Description
+The objective is to modernize the current static video generation pipeline into an agent-first architecture, inspired by the provided YouTube tutorial ([tutorial1.md](file:///d:/10_Workspace/10_Gentomatic/vidgen/assets/ref/tutorial1.md)). The current implementation ([pipeline.py](file:///d:/10_Workspace/10_Gentomatic/vidgen/vidgen/pipeline.py) and [gemini_client.py](file:///d:/10_Workspace/10_Gentomatic/vidgen/vidgen/utils/gemini_client.py)) synchronously loops over scenes and hardcodes model usage (e.g., `veo-2.0-generate-001`). 
+
+The tutorial demonstrates that giving agents access to discrete API tools allows them to:
+1. Dynamically route requests to models (Veo, Kling, Sora) based on style or visual requirements.
+2. Process multiple scenes in parallel.
+3. Decouple generation requests from polling (asynchronous workflow).
+4. Utilize a living "Best Practices" document to refine generation prompts and configurations.
+
+## Proposed Changes
+
+### 1. Refactor Video Generation into Asynchronous Tools
+- **[MODIFY] [vidgen/utils/gemini_client.py](file:///d:/10_Workspace/10_Gentomatic/vidgen/vidgen/utils/gemini_client.py)**
+  - Break [generate_video_gemini](file:///d:/10_Workspace/10_Gentomatic/vidgen/vidgen/utils/gemini_client.py#30-85) into two parts: `submit_generation_job(...)` which returns an operation ID immediately, and `check_generation_status(operation_id)` which polls or checks if the job is done.
+  - Remove the hardcoded 10-second `time.sleep` blocking loop.
+  - Expose these as functions that an agent (or a parallel orchestrator) can invoke without locking up the thread.
+
+### 2. Implement Agentic Routing and Parallel Generation
+- **[MODIFY] [vidgen/pipeline.py](file:///d:/10_Workspace/10_Gentomatic/vidgen/vidgen/pipeline.py) (or introduce `vidgen/vidgen_agent.py`)**
+  - Refactor [step_generate_videos](file:///d:/10_Workspace/10_Gentomatic/vidgen/vidgen/pipeline.py#161-200) where instead of sequential loops (`for scene in video_scenes:`), we launch an agent or a thread-pool that processes all scenes simultaneously.
+  - Introduce an AI agent decision step that looks at the scene's prompt and decides which backend (HF vs. Gemini/Veo) to use, replacing the rigid `if config.gemini_api_key:` check.
+
+### 3. Inject "Best Practices" Knowledge
+- **[NEW] `assets/ref/best_practices.md`**
+  - Create a foundational markdown file outlining prompting techniques for video models (e.g., what keywords work best for Veo, or how to maintain consistency).
+  - Modify the VidGen pipeline initialization to load this file so the AI agent (e.g., the Story Reviewer or a new Prompt Engineer agent) can consult it before constructing the final prompt for the generation tool.
+
+## Verification Plan
+
+### Automated Tests
+1. **Mock Testing**: Create a dummy unit test that simulates the `submit_generation_job` returning mock job IDs, verifying that the pipeline can launch 5 concurrent jobs without blocking.
+2. **End-to-End Orchestrator Run**: 
+   - Command: `python orchestrator.py --prompt "A fast-paced futuristic city tour"`
+   - Check the console logs for simultaneous job submissions (`Job submitted for scene 1`, `Job submitted for scene 2`, etc.) rather than purely sequential output.
+   - Verify that the resulting `manifest.json` correctly maps the final compiled video to the generated assets.
+
+### Manual Verification
+- Review the `vidgen.log` to ensure the agent is reading `best_practices.md` and modifying the user's base prompt effectively (e.g., adding "cinematic lighting, skin detail" as mentioned in the tutorial).
+- Verify the overall execution time is significantly reduced compared to the synchronous version, as video generation happens in parallel.

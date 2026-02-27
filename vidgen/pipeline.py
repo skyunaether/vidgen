@@ -169,7 +169,26 @@ class Pipeline:
         self._check_cancel()
 
         tmp = Path(self._tmpdir)
+        
+        available_models = []
+        if self.config.gemini_api_key: available_models.append("veo")
+        if self.config.hf_token: available_models.append("hf")
+            
+        best_practices_path = Path(__file__).parent.parent / "assets" / "ref" / "best_practices.md"
+        best_practices = ""
+        if best_practices_path.exists():
+            with open(best_practices_path, "r", encoding="utf-8") as f:
+                best_practices = f.read()
 
+        import concurrent.futures
+        import time
+        from .utils.gemini_client import submit_video_generation_gemini, check_video_generation_gemini
+        from .story_agent import _chat, _extract_json
+        
+        veo_jobs = {}
+        hf_futures = {}
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+        
         for scene in video_scenes:
             self._check_cancel()
             if scene.index not in media_paths:
@@ -177,25 +196,70 @@ class Pipeline:
 
             img_path = media_paths[scene.index]
             vid_path = tmp / f"scene_{scene.index:03d}.mp4"
-            self.progress_cb(f"  Animating scene {scene.index}...")
+            self.progress_cb(f"  Preparing scene {scene.index}...")
 
+            if self.use_placeholders or not available_models:
+                generate_placeholder_video(img_path, vid_path, duration=scene.duration)
+                self.progress_cb(f"  ✓ Scene {scene.index} animated (placeholder)")
+                media_paths[scene.index] = vid_path
+                continue
+
+            selected_model = "veo" if "veo" in available_models else "hf"
+            enhanced_prompt = scene.visual
             try:
-                if self.use_placeholders or (not self.config.hf_token and not self.config.gemini_api_key):
-                    generate_placeholder_video(img_path, vid_path, duration=scene.duration)
-                    self.progress_cb(f"  ✓ Scene {scene.index} animated (placeholder)")
-                else:
-                    if self.config.gemini_api_key:
-                        from .utils.gemini_client import generate_video_gemini
-                        generate_video_gemini(scene.visual, vid_path, self.config, self.progress_cb)
-                        self.progress_cb(f"  ✓ Scene {scene.index} animated (Veo)")
-                    else:
-                        generate_video(img_path, vid_path, self.config, self.progress_cb)
-                        self.progress_cb(f"  ✓ Scene {scene.index} animated (HF)")
-                    media_paths[scene.index] = vid_path
+                if self.config.hf_token:
+                    system_msg = "You are a Video AI Agent that routes requests to the best model and enhances prompts based on best practices. Reply ONLY with JSON."
+                    user_msg = f"AVAILABLE MODELS: {available_models}\nBEST PRACTICES:\n{best_practices}\n\nORIGINAL PROMPT: {scene.visual}\nMEDIA TYPE: {scene.media_type}\n\nReturn JSON with keys 'selected_model' and 'enhanced_prompt'."
+                    resp = _chat(system_msg, user_msg, "meta-llama/Llama-3.1-8B-Instruct", self.config.hf_token, max_tokens=500)
+                    data = _extract_json(resp)
+                    enhanced_prompt = data.get("enhanced_prompt", scene.visual)
+                    chosen = data.get("selected_model", selected_model)
+                    if chosen in available_models: selected_model = chosen
             except Exception as e:
-                self.progress_cb(f"  ⚠ Animation failed for scene {scene.index}: {e}")
-                log.warning("Video gen failed for scene %d, keeping image: %s", scene.index, e)
+                log.warning(f"Agent routing failed for scene {scene.index}, using default: {e}")
 
+            if selected_model == "veo":
+                try:
+                    op_name = submit_video_generation_gemini(enhanced_prompt, self.config, self.progress_cb)
+                    veo_jobs[scene.index] = (op_name, vid_path)
+                except Exception as e:
+                    self.progress_cb(f"  ⚠ Failed to submit Veo job for scene {scene.index}: {e}")
+            else:
+                def run_hf_gen(img_p, vid_p):
+                    generate_video(img_p, vid_p, self.config, self.progress_cb)
+                future = executor.submit(run_hf_gen, img_path, vid_path)
+                hf_futures[future] = (scene.index, vid_path)
+
+        for future in concurrent.futures.as_completed(hf_futures):
+            idx, vid_p = hf_futures[future]
+            try:
+                future.result()
+                self.progress_cb(f"  ✓ Scene {idx} animated (HF)")
+                media_paths[idx] = vid_p
+            except Exception as e:
+                self.progress_cb(f"  ⚠ HF Animation failed for scene {idx}: {e}")
+
+        while veo_jobs:
+            self._check_cancel()
+            done_keys = []
+            for idx, (op_name, vid_p) in veo_jobs.items():
+                try:
+                    res = check_video_generation_gemini(op_name, vid_p, self.config)
+                    if res is not None:
+                        self.progress_cb(f"  ✓ Scene {idx} animated (Veo)")
+                        media_paths[idx] = res
+                        done_keys.append(idx)
+                except Exception as e:
+                    self.progress_cb(f"  ⚠ Veo Animation failed for scene {idx}: {e}")
+                    done_keys.append(idx)
+                    
+            for k in done_keys:
+                del veo_jobs[k]
+                
+            if veo_jobs:
+                time.sleep(5)
+
+        executor.shutdown(wait=True)
         return media_paths
 
     def step_generate_narration(self) -> str | None:
@@ -276,6 +340,39 @@ class Pipeline:
             log.warning("Music gen failed: %s", e)
             return None
 
+    def step_export_airtable(self, media_paths: dict[int, Path]) -> None:
+        """Stage 4.8/5: Export scene data to a CSV for Airtable import."""
+        self.progress_cb("📊 Stage 4.8/5: Exporting Airtable spreadsheet...")
+        self._check_cancel()
+
+        import csv
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = Path(self.config.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = output_dir / f"airtable_export_{timestamp}.csv"
+
+        try:
+            with open(csv_path, mode="w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                # Airtable-friendly headers
+                writer.writerow(["Scene Index", "Media Type", "Duration", "Narration", "Visual Prompt", "Generated Media Path"])
+                
+                for scene in self._scenes:
+                    media_path = str(media_paths.get(scene.index, ""))
+                    writer.writerow([
+                        scene.index,
+                        scene.media_type,
+                        scene.duration,
+                        scene.narration,
+                        scene.visual,
+                        media_path
+                    ])
+            self.progress_cb(f"  ✓ Airtable CSV saved to {csv_path}")
+        except Exception as e:
+            self.progress_cb(f"  ⚠ Failed to export Airtable CSV: {e}")
+            log.warning("Airtable CSV export failed: %s", e)
+
     def step_compile(
         self,
         media_paths: dict[int, Path],
@@ -335,6 +432,7 @@ class Pipeline:
             media_paths = self.step_generate_videos(media_paths)
             narration = self.step_generate_narration()
             bg_music = self.step_generate_music(prompt)
+            self.step_export_airtable(media_paths)
             output = self.step_compile(media_paths, bg_music=bg_music, narration=narration)
             self.progress_cb(f"\n🎉 Done! Video saved to: {output}")
             return output

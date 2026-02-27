@@ -61,7 +61,10 @@ def main():
     spec = generate_spec(args.prompt)
     
     with open(args.output, "w", encoding="utf-8") as f:
-        f.write(spec.model_dump_json(indent=2))
+        try:
+            f.write(spec.model_dump_json(indent=2))
+        except AttributeError:
+            f.write(spec.json(indent=2))
         
     print(f"ProjectManager: Finished. Saved to {args.output}")
 

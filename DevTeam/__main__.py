@@ -28,7 +28,11 @@ def propose_changes(report: QCReport, plan_path: str) -> dict:
     with open(plan_path, "r", encoding="utf-8") as f:
         plan_txt = f.read()
         
-    user_prompt = f"QC Report:\n{report.model_dump_json(indent=2)}\n\nCurrent Plan:\n{plan_txt}"
+    try:
+        report_json = report.model_dump_json(indent=2)
+    except AttributeError:
+        report_json = report.json(indent=2)
+    user_prompt = f"QC Report:\n{report_json}\n\nCurrent Plan:\n{plan_txt}"
     # Use a specialized coding model for logic, variable manipulation, and valid JSON config diffs
     res = client.chat_completion(
         model="Qwen/Qwen2.5-Coder-32B-Instruct",
@@ -113,7 +117,10 @@ def main():
     )
     
     with open(args.output, "w", encoding="utf-8") as f:
-        f.write(proposal.model_dump_json(indent=2))
+        try:
+            f.write(proposal.model_dump_json(indent=2))
+        except AttributeError:
+            f.write(proposal.json(indent=2))
         
     print(f"DevTeam: Finished. Proposal saved to {args.output}")
 
