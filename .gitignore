@@ -104,3 +104,12 @@ Thumbs.db
 # VidGen
 runs/
 *.local.json
+
+# Web UI (SolidJS / Node)
+webui/frontend/node_modules/
+webui/frontend/dist/
+webui/frontend/.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*

@@ -5,9 +5,21 @@ import logging
 import shutil
 import tempfile
 import threading
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
+
+
+@dataclass
+class PipelineOptions:
+    """Granular stage-level execution flags for the web UI."""
+    story_review: bool = True   # Stage 1.5: AI reviewer-refiner loop
+    image_gen: bool = True      # Stage 2: image generation
+    video_gen: bool = True      # Stage 3: video animation
+    narration: bool = True      # Stage 4: TTS narration
+    music_gen: bool = True      # Stage 4.5: background music
+    compile: bool = True        # Stage 5: final compilation
 
 from .compiler import compile_video
 from .config import Config
@@ -34,10 +46,12 @@ class Pipeline:
         config: Config,
         progress_cb: Callable[[str], None] | None = None,
         use_placeholders: bool = False,
+        options: PipelineOptions | None = None,
     ):
         self.config = config
         self.progress_cb = progress_cb or (lambda msg: None)
         self.use_placeholders = use_placeholders
+        self.options = options or PipelineOptions()
         self._cancelled = threading.Event()
         self._scenes: list[Scene] = []
         self._settings: StorySettings = StorySettings()
@@ -399,16 +413,17 @@ class Pipeline:
 
         return output_path
 
-    def run(self, prompt: str) -> Path:
+    def run(self, prompt: str) -> Path | None:
         """Run the complete pipeline end-to-end.
 
         Returns the path to the final video.
         """
         try:
             if not self._scenes:
-                # Normal path: generate script from prompt + AI review
+                # Normal path: generate script from prompt + optional AI review
                 self.step_generate_script(prompt)
-                self.step_review_story(prompt)
+                if self.options.story_review:
+                    self.step_review_story(prompt)
             else:
                 # User-provided story: skip generation and review
                 total_dur = sum(s.duration for s in self._scenes)
@@ -427,12 +442,37 @@ class Pipeline:
                 voice=s.voice, rate=s.voice_rate, pitch=s.voice_pitch,
             )
             self.progress_cb("")
-            
-            media_paths = self.step_generate_images()
-            media_paths = self.step_generate_videos(media_paths)
-            narration = self.step_generate_narration()
-            bg_music = self.step_generate_music(prompt)
+
+            media_paths: dict[int, Path] = {}
+            if self.options.image_gen:
+                media_paths = self.step_generate_images()
+            else:
+                self.progress_cb("⏭️ Stage 2/5: Image generation skipped.")
+
+            if self.options.video_gen:
+                media_paths = self.step_generate_videos(media_paths)
+            else:
+                self.progress_cb("⏭️ Stage 3/5: Video animation skipped.")
+
+            narration: str | None = None
+            if self.options.narration:
+                narration = self.step_generate_narration()
+            else:
+                self.progress_cb("⏭️ Stage 4/5: Narration skipped.")
+
+            bg_music: str | None = None
+            if self.options.music_gen:
+                bg_music = self.step_generate_music(prompt)
+            else:
+                self.progress_cb("⏭️ Stage 4.5/5: Music generation skipped.")
+
             self.step_export_airtable(media_paths)
+
+            if not self.options.compile:
+                self.progress_cb("⏭️ Stage 5/5: Compilation skipped.")
+                self.progress_cb("\n✅ Pipeline finished (no video output — compile stage disabled).")
+                return None
+
             output = self.step_compile(media_paths, bg_music=bg_music, narration=narration)
             self.progress_cb(f"\n🎉 Done! Video saved to: {output}")
             return output
